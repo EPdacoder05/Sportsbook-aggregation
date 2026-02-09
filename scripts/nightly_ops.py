@@ -35,6 +35,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from engine.confidence_decay import ConfidenceDecayEngine
+
 
 def load_env():
     """Load .env file if python-dotenv is available."""
@@ -395,7 +397,7 @@ def main():
     print("═" * 60)
 
     # ── Step 1: Fetch ESPN Slate ──
-    print("\n[1/7] Fetching today's slate from ESPN...")
+    print("\n[1/8] Fetching today's slate from ESPN...")
     games = fetch_espn_slate(args.sport)
     print(f"  Found {len(games)} games")
 
@@ -409,36 +411,72 @@ def main():
     # ── Step 2: Fetch Odds ──
     odds_data = []
     if not args.no_odds:
-        print("\n[2/7] Fetching odds from The Odds API...")
+        print("\n[2/8] Fetching odds from The Odds API...")
         api_key = os.environ.get("ODDS_API_KEY", "")
         odds_data = fetch_odds(args.sport, api_key)
         print(f"  Got odds for {len(odds_data)} events")
     else:
-        print("\n[2/7] Skipping odds fetch (--no-odds)")
+        print("\n[2/8] Skipping odds fetch (--no-odds)")
 
     # ── Step 3: Merge ──
-    print("\n[3/7] Merging slate with odds...")
+    print("\n[3/8] Merging slate with odds...")
     merged = merge_slate_with_odds(games, odds_data)
     games_with_odds = sum(1 for g in merged if g.get("odds", {}).get("num_books", 0) > 0)
     print(f"  Merged: {games_with_odds}/{len(merged)} games have odds")
 
     # ── Step 4: Analyze ──
-    print("\n[4/7] Running analysis on all games...")
+    print("\n[4/8] Running analysis on all games...")
     analyses = [analyze_game(g) for g in merged]
 
     # ── Step 5: Generate Pick Card ──
-    print("\n[5/7] Generating pick card...")
+    print("\n[5/8] Generating pick card...")
     pick_card = generate_pick_card(analyses)
+
+    # ── Step 5.5: Apply Confidence Decay ──
+    print("\n[5.5/8] Applying confidence decay...")
+    decay_engine = ConfidenceDecayEngine()
+    
+    # Collect all picks with tier info
+    all_picks = []
+    for tier_key in ["tier1", "tier2", "leans"]:
+        for pick in pick_card.get(tier_key, []):
+            # Add timestamp if not present
+            if "timestamp" not in pick:
+                pick["timestamp"] = datetime.now().isoformat()
+            all_picks.append(pick)
+    
+    # Apply decay
+    if all_picks:
+        decayed_picks = decay_engine.apply_decay_to_slate(all_picks)
+        
+        # Reorganize picks by updated tier
+        pick_card["tier1"] = [p for p in decayed_picks if p.get("current_tier") == "TIER1"]
+        pick_card["tier2"] = [p for p in decayed_picks if p.get("current_tier") == "TIER2"]
+        pick_card["leans"] = [p for p in decayed_picks if p.get("current_tier") == "LEAN"]
+        pick_card["passes"] = [p for p in decayed_picks if p.get("current_tier") == "PASS"]
+        
+        # Update summary
+        pick_card["summary"]["tier1_plays"] = len(pick_card["tier1"])
+        pick_card["summary"]["tier2_plays"] = len(pick_card["tier2"])
+        pick_card["summary"]["leans"] = len(pick_card["leans"])
+        pick_card["summary"]["passes"] = len(pick_card["passes"])
+        
+        # Log promotions/demotions
+        for pick in decayed_picks:
+            if "status_change" in pick:
+                print(f"  {pick['status_change']}: {pick.get('game', '?')}")
+    
+    print(f"  Processed {len(all_picks)} picks through decay engine")
 
     # ── Step 6: Evaluate Boosts ──
     if args.boosts:
-        print("\n[6/7] Evaluating profit boosts...")
+        print("\n[6/8] Evaluating profit boosts...")
         evaluate_boosts(args.boosts)
     else:
-        print("\n[6/7] No boosts to evaluate")
+        print("\n[6/8] No boosts to evaluate")
 
     # ── Step 7: Output ──
-    print("\n[7/7] Finalizing...")
+    print("\n[7/8] Finalizing...")
     print_pick_card(pick_card)
     save_pick_card(pick_card)
     send_discord_alert(pick_card, dry_run=args.dry_run)
