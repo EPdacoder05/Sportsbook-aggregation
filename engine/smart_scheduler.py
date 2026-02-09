@@ -43,6 +43,7 @@ from dataclasses import dataclass, field, asdict
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.credit_tracker import CreditTracker
+from engine.signals import SignalClassifier
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -492,6 +493,42 @@ class SmartGameScheduler:
             total_analysis = self._analyze_totals(total_lines)
             ml_analysis = self._analyze_moneylines(ml_lines, home, away)
 
+            # ── Signal Classification ─────────────────────────────────
+            # Construct input dicts for SignalClassifier
+            classifier = SignalClassifier()
+            
+            # Note: Opening lines not always available at scheduler runtime
+            # We'll use current lines and handle missing data gracefully
+            spread_data = None
+            if spread_analysis:
+                spread_data = {
+                    "open": None,  # Opening line not stored yet
+                    "current": spread_analysis["consensus_line"],
+                    "public_pct": None,  # Public data not available here
+                }
+            
+            total_data = None
+            if total_analysis:
+                total_data = {
+                    "open": None,  # Opening line not stored yet
+                    "current": total_analysis["consensus_line"],
+                    "over_pct": None,  # Public data not available here
+                }
+            
+            book_data = None
+            if spread_analysis:
+                book_data = {
+                    "spread_range": spread_analysis.get("spread_range", 0),
+                }
+            
+            # Run signal classification
+            signal_profile = classifier.classify(
+                game_key=game_key,
+                spread_data=spread_data,
+                total_data=total_data,
+                book_data=book_data,
+            )
+
             results[game_key] = {
                 "game": game_key,
                 "commence_time": commence,
@@ -502,6 +539,7 @@ class SmartGameScheduler:
                 "raw_spread_lines": spread_lines,
                 "raw_total_lines": total_lines,
                 "raw_ml_lines": ml_lines,
+                "signal_profile": signal_profile.to_dict(),
             }
 
             # Print summary
@@ -526,6 +564,17 @@ class SmartGameScheduler:
                     f"      ML: {home} {ml_analysis['home_consensus']:+d} / "
                     f"{away} {ml_analysis['away_consensus']:+d}"
                 )
+            
+            # Log signal classification results
+            if signal_profile.tier != "PASS":
+                logger.info(f"      🎯 SIGNAL: {signal_profile.tier} (confidence: {signal_profile.total_confidence:.0f}%)")
+                if signal_profile.primary_signals:
+                    for sig in signal_profile.primary_signals:
+                        logger.info(f"         PRIMARY: {sig.signal_type.value}")
+                if signal_profile.confirmation_signals:
+                    logger.info(f"         +{len(signal_profile.confirmation_signals)} confirmation signals")
+            elif signal_profile.confirmation_signals and not signal_profile.has_primary:
+                logger.info(f"      ⚠️  {len(signal_profile.confirmation_signals)} confirmation signals but NO PRIMARY — PASS")
 
         window.analysis_complete = True
 
