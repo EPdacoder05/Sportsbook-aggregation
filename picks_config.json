@@ -1,0 +1,52 @@
+{
+  "cincinnati-ucf": {
+    "away": "Cincinnati Bearcats",
+    "home": "UCF Knights",
+    "spread": 2.5,
+    "bet": "Cincinnati",
+    "status": "ACTIVE",
+    "reason": "Line divergence: moved from -3.5 to +2.5 toward dog, public 88% UCF",
+    "unit_size": 100,
+    "added": "2026-01-11T19:28:34.904045"
+  },
+  "knicks-trail": {
+    "away": "Knicks",
+    "home": "Trail Blazers",
+    "spread": -4.5,
+    "bet": "Trail Blazers",
+    "status": "ACTIVE",
+    "reason": "Whale money: line moved -5.5, public 50-50 split",
+    "unit_size": 100,
+    "added": "2026-01-11T19:28:34.904071"
+  },
+  "raptors-76ers": {
+    "away": "76ers",
+    "home": "Raptors",
+    "spread": 1.5,
+    "bet": "Raptors",
+    "status": "ACTIVE",
+    "reason": "Line moved from -3.5 to -2 (toward dog), public 66% PHI",
+    "unit_size": 100,
+    "added": "2026-01-11T19:28:34.904073"
+  },
+  "ohio-state-washington": {
+    "away": "Ohio State",
+    "home": "Washington",
+    "spread": -1.5,
+    "bet": null,
+    "status": "MONITORING",
+    "reason": "Watching for divergence signals",
+    "unit_size": 0,
+    "added": "2026-01-11T19:28:34.904074"
+  },
+  "memphis-uab": {
+    "away": "Memphis",
+    "home": "UAB",
+    "spread": null,
+    "bet": null,
+    "status": "MONITORING",
+    "reason": "Monitoring live action",
+    "unit_size": 0,
+    "added": "2026-01-11T19:28:34.904076"
+  }
+}

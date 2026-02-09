@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: house_edge_db
+    environment:
+      POSTGRES_USER: house_edge
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-change_me_in_production}
+      POSTGRES_DB: house_edge
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U house_edge"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - house_edge_network
+
+  # API Server
+  api:
+    build: .
+    container_name: house_edge_api
+    environment:
+      DATABASE_URL: postgresql://house_edge:${DB_PASSWORD:-change_me_in_production}@postgres:5432/house_edge
+      TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN}
+      ODDS_API_KEY: ${ODDS_API_KEY}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER}
+      ALERT_PHONE_NUMBER: ${ALERT_PHONE_NUMBER}
+      USE_REDIS: ${USE_REDIS:-true}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    networks:
+      - house_edge_network
+    restart: unless-stopped
+
+  # Autonomous Engine (Background Worker)
+  engine:
+    build: .
+    container_name: house_edge_engine
+    command: python start_autonomous_engine.py
+    environment:
+      DATABASE_URL: postgresql://house_edge:${DB_PASSWORD:-change_me_in_production}@postgres:5432/house_edge
+      TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN}
+      ODDS_API_KEY: ${ODDS_API_KEY}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    networks:
+      - house_edge_network
+    restart: unless-stopped
+
+  # Dashboard (Streamlit)
+  dashboard:
+    build: .
+    container_name: house_edge_dashboard
+    command: streamlit run dashboard/app.py --server.port=8501
+    environment:
+      DATABASE_URL: postgresql://house_edge:${DB_PASSWORD:-change_me_in_production}@postgres:5432/house_edge
+      API_BASE_URL: http://api:8000
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+    ports:
+      - "8501:8501"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    networks:
+      - house_edge_network
+    restart: unless-stopped
+
+  # Redis (Pub/Sub for events)
+  redis:
+    image: redis:7-alpine
+    container_name: house_edge_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - house_edge_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  house_edge_network:
+    driver: bridge
