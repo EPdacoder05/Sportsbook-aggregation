@@ -230,6 +230,10 @@ class SignalClassifier:
         ats_data: Optional[Dict] = None,
         freeze_data: Optional[Dict] = None,
         book_data: Optional[Dict] = None,
+        cross_source_data: Optional[Dict] = None,
+        pace_data: Optional[Dict] = None,
+        rest_data: Optional[Dict] = None,
+        home_road_data: Optional[Dict] = None,
     ) -> GameSignalProfile:
         """
         Run all signal detection and return a classified profile.
@@ -242,6 +246,10 @@ class SignalClassifier:
             ats_data:    {"away_l10_ats": "3-7", "home_l10_ats": "2-8", ...}
             freeze_data: {"signal": "BOOK_TRAP", "hours_frozen": 6, ...}
             book_data:   {"spread_range": 1.5, "total_range": 2.0, ...}
+            cross_source_data: {"dk_pct": 64, "covers_pct": 48, "side": "over"}
+            pace_data:   {"away_pace_rank": 5, "home_pace_rank": 25, "league_avg_pace": 100}
+            rest_data:   {"away_rest_days": 0, "home_rest_days": 2}
+            home_road_data: {"away_road_ats": "3-7", "home_home_ats": "8-2"}
         """
         profile = GameSignalProfile(game_key=game_key)
 
@@ -282,6 +290,30 @@ class SignalClassifier:
         # 6. Book Disagreement
         if book_data:
             sig = self._detect_book_disagreement(book_data)
+            if sig:
+                profile.add_signal(sig)
+
+        # 7. Cross-Source Divergence
+        if cross_source_data:
+            sig = self._detect_cross_source_divergence(cross_source_data)
+            if sig:
+                profile.add_signal(sig)
+
+        # 8. Pace Mismatch
+        if pace_data:
+            sig = self._detect_pace_mismatch(pace_data)
+            if sig:
+                profile.add_signal(sig)
+
+        # 9. Rest Advantage
+        if rest_data:
+            sig = self._detect_rest_advantage(rest_data)
+            if sig:
+                profile.add_signal(sig)
+
+        # 10. Home/Road Split
+        if home_road_data:
+            sig = self._detect_home_road_split(home_road_data)
             if sig:
                 profile.add_signal(sig)
 
@@ -454,3 +486,134 @@ class SignalClassifier:
                 raw_data=data,
             )
         return None
+
+    def _detect_cross_source_divergence(self, data: Dict) -> Optional[DetectedSignal]:
+        """
+        Detect when DraftKings public % and Covers.com consensus disagree by 15%+.
+        
+        Args:
+            data: {"dk_pct": 64, "covers_pct": 48, "side": "over"}
+        """
+        dk_pct = data.get("dk_pct", 0)
+        covers_pct = data.get("covers_pct", 0)
+        side = data.get("side", "").lower()
+        
+        divergence = abs(dk_pct - covers_pct)
+        
+        if divergence >= 15:
+            return DetectedSignal(
+                signal_type=SignalType.CROSS_SOURCE_DIVERGENCE,
+                category=SignalCategory.CONFIRMATION,
+                magnitude=divergence,
+                confidence_add=CONFIDENCE_CONTRIBUTIONS[SignalType.CROSS_SOURCE_DIVERGENCE]["base"],
+                description=f"CROSS-SOURCE DIVERGENCE: DK {dk_pct:.0f}% vs Covers {covers_pct:.0f}% on {side.upper()} — {divergence:.0f}% gap",
+                raw_data=data,
+            )
+        return None
+
+    def _detect_pace_mismatch(self, data: Dict) -> Optional[DetectedSignal]:
+        """
+        Detect significant pace differential suggesting total value.
+        
+        Args:
+            data: {"away_pace_rank": 5, "home_pace_rank": 25, "league_avg_pace": 100}
+        """
+        away_pace = data.get("away_pace_rank", 0)
+        home_pace = data.get("home_pace_rank", 0)
+        
+        pace_gap = abs(away_pace - home_pace)
+        
+        if pace_gap >= 10:
+            faster_team = "Away" if away_pace < home_pace else "Home"
+            slower_team = "Home" if away_pace < home_pace else "Away"
+            
+            return DetectedSignal(
+                signal_type=SignalType.PACE_MISMATCH,
+                category=SignalCategory.CONFIRMATION,
+                magnitude=pace_gap,
+                confidence_add=CONFIDENCE_CONTRIBUTIONS[SignalType.PACE_MISMATCH]["base"],
+                description=f"PACE MISMATCH: {pace_gap} rank gap ({faster_team} #{min(away_pace, home_pace)} vs {slower_team} #{max(away_pace, home_pace)}) — total value opportunity",
+                raw_data=data,
+            )
+        return None
+
+    def _detect_rest_advantage(self, data: Dict) -> Optional[DetectedSignal]:
+        """
+        Detect when one team is on back-to-back and other is rested.
+        
+        Args:
+            data: {"away_rest_days": 0, "home_rest_days": 2}
+        """
+        away_rest = data.get("away_rest_days", 0)
+        home_rest = data.get("home_rest_days", 0)
+        
+        rest_gap = abs(away_rest - home_rest)
+        
+        if rest_gap >= 2:
+            rested_team = "Home" if home_rest > away_rest else "Away"
+            b2b_team = "Away" if home_rest > away_rest else "Home"
+            
+            return DetectedSignal(
+                signal_type=SignalType.REST_ADVANTAGE,
+                category=SignalCategory.CONFIRMATION,
+                magnitude=rest_gap,
+                confidence_add=CONFIDENCE_CONTRIBUTIONS[SignalType.REST_ADVANTAGE]["base"],
+                description=f"REST ADVANTAGE: {rested_team} team rested ({max(away_rest, home_rest)}+ days) vs {b2b_team} on back-to-back",
+                raw_data=data,
+            )
+        return None
+
+    def _detect_home_road_split(self, data: Dict) -> Optional[DetectedSignal]:
+        """
+        Detect extreme home/road ATS splits.
+        
+        Args:
+            data: {"away_road_ats": "3-7", "home_home_ats": "8-2"}
+        """
+        away_road = data.get("away_road_ats", "")
+        home_home = data.get("home_home_ats", "")
+        
+        def calc_win_pct(record: str) -> Optional[float]:
+            if not record or "-" not in record:
+                return None
+            try:
+                wins, losses = record.split("-")
+                wins = int(wins)
+                losses = int(losses)
+                total = wins + losses
+                if total == 0:
+                    return None
+                return wins / total
+            except (ValueError, IndexError):
+                return None
+        
+        away_pct = calc_win_pct(away_road)
+        home_pct = calc_win_pct(home_home)
+        
+        # Check for extreme splits (>=70% or <=30%)
+        if away_pct is not None and (away_pct >= 0.70 or away_pct <= 0.30):
+            magnitude = abs(away_pct - 0.5) * 100
+            description = f"HOME/ROAD SPLIT: Away team {away_road} ATS on road ({'hot' if away_pct >= 0.70 else 'cold'} {away_pct:.0%})"
+            return DetectedSignal(
+                signal_type=SignalType.HOME_ROAD_SPLIT,
+                category=SignalCategory.CONFIRMATION,
+                magnitude=magnitude,
+                confidence_add=CONFIDENCE_CONTRIBUTIONS[SignalType.HOME_ROAD_SPLIT]["base"],
+                description=description,
+                raw_data=data,
+            )
+        
+        if home_pct is not None and (home_pct >= 0.70 or home_pct <= 0.30):
+            magnitude = abs(home_pct - 0.5) * 100
+            description = f"HOME/ROAD SPLIT: Home team {home_home} ATS at home ({'hot' if home_pct >= 0.70 else 'cold'} {home_pct:.0%})"
+            return DetectedSignal(
+                signal_type=SignalType.HOME_ROAD_SPLIT,
+                category=SignalCategory.CONFIRMATION,
+                magnitude=magnitude,
+                confidence_add=CONFIDENCE_CONTRIBUTIONS[SignalType.HOME_ROAD_SPLIT]["base"],
+                description=description,
+                raw_data=data,
+            )
+        
+        return None
+
