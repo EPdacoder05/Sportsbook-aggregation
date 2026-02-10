@@ -28,9 +28,10 @@ opencv-python==4.9.0.80
 
 # AI/ML
 openai==1.10.0  # For Grok API
-scikit-learn==1.4.0
+scikit-learn==1.6.1
 pandas==2.2.0
-numpy==1.26.3
+numpy==2.2.3
+joblib==1.4.2
 
 # Twitter/X API
 tweepy==4.14.0
@@ -61,7 +62,6 @@ altair==5.2.0
 # Scheduling
 apscheduler==3.10.4
 celery==5.3.6
-redis==5.0.1
 
 # Utilities
 loguru==0.7.2

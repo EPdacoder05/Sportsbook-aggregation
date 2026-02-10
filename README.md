@@ -69,7 +69,18 @@ Output
 | `credit_tracker.py` | Tracks Odds API credit usage (500/month budget). Prevents overspending. |
 | `line_movement_tracker.py` | Monitors and records line movements over time for RLM detection. |
 | `game_discovery.py` | Discovers today's games from ESPN (free, no API credits). |
+| `betting_engine.py` | **Unified orchestrator.** Wires signals + decay + freeze + ML into a single `analyze_game()` pipeline. |
+| `no_bet_detector.py` | Coin-flip filter. Identifies games with zero edge via weighted scoring. Primary signal gate overrides. |
 | `autonomous_engine.py` | Original autonomous engine for whale tracking and fade detection. |
+
+### ML/AI Layer (`engine/ml/`)
+
+| Module | Purpose |
+|--------|---------|
+| `feature_engine.py` | Transforms raw odds/signals/context into 32-dimension feature vectors for ML models. |
+| `pick_model.py` | Gradient-Boosted supervised classifier. Learns WIN/LOSS from historical picks. Auto-retrains every 25 results. |
+| `anomaly_detector.py` | Isolation Forest unsupervised detector. Flags games with unusual line/book/public profiles. |
+| `model_monitor.py` | Drift detection (Page-Hinkley + PSI). Auto-triggers retrain when performance degrades. |
 
 ### Scripts (`scripts/`)
 
@@ -224,8 +235,15 @@ The `engine/boost_ev.py` module evaluates DraftKings profit boosts:
 │   ├── clv_tracker.py         # Closing Line Value tracker
 │   ├── line_freeze_detector.py# Book trap detection
 │   ├── boost_ev.py            # Profit boost EV calculator
+│   ├── betting_engine.py      # Unified orchestrator (wires everything)
+│   ├── no_bet_detector.py     # Coin-flip filter
 │   ├── smart_scheduler.py     # Credit-aware scheduler
 │   ├── credit_tracker.py      # API credit budget tracker
+│   ├── ml/                    # ML/AI layer
+│   │   ├── feature_engine.py  # 32-dim feature extraction
+│   │   ├── pick_model.py      # Supervised GradientBoosting
+│   │   ├── anomaly_detector.py# Unsupervised Isolation Forest
+│   │   └── model_monitor.py   # Drift detection & auto-retrain
 │   └── ...
 ├── scripts/                   # Runnable scripts
 │   ├── nightly_ops.py         # Main entry point
@@ -249,6 +267,84 @@ The `engine/boost_ev.py` module evaluates DraftKings profit boosts:
 ├── requirements.txt           # Python dependencies
 └── README.md
 ```
+
+---
+
+## ML/AI Architecture
+
+The engine uses a **closed-loop learning system**: predictions → results → retrain → better predictions.
+
+```
+Game Data → FeatureEngine (32-dim vector)
+                │
+                ├── PickModel (Supervised)
+                │     └── GradientBoosting → Win probability
+                │     └── Calibrated probabilities (Platt scaling)
+                │     └── Anti-overfitting: early stopping, 5-fold CV,
+                │         min 50 samples, holdout validation
+                │
+                ├── AnomalyDetector (Unsupervised)
+                │     └── Isolation Forest → "Is this game unusual?"
+                │     └── Z-score per feature → "Which features are off?"
+                │
+                └── ModelMonitor (Drift Detection)
+                      └── Page-Hinkley test → streaming concept drift
+                      └── PSI (Population Stability Index) → feature drift
+                      └── Rolling accuracy/AUC/Brier → performance decay
+                      └── Auto-retrain when drift detected
+```
+
+**Key Anti-Overfitting Guards:**
+- Minimum 50-game sample before predictions activate
+- Early stopping (patience=20) on validation loss
+- Max tree depth=4, min samples per leaf=5
+- Feature bagging (sqrt features per split)
+- Calibrated probabilities via Platt scaling
+- Separate holdout set (10%) never used for training
+- Model drift monitor triggers retrain, not manual tuning
+
+---
+
+## Roadmap
+
+### Phase 1: Core Engine ✅ SHIPPED
+- Signal classification (10 signal types, PRIMARY vs CONFIRMATION)
+- Confidence decay (time + market based)
+- CLV tracking, line freeze detection, boost EV calculator
+- Credit-aware scheduler, game discovery, nightly ops pipeline
+- Discord notifications, post-game autopsy
+
+### Phase 2: Unified Pipeline ✅ SHIPPED (PR #1)
+- BettingEngine unified orchestrator
+- NoBetDetector coin-flip filter
+- Signal wiring into smart_scheduler
+- Confidence decay integration into nightly_ops
+
+### Phase 3: ML/AI Layer ✅ SHIPPED
+- 32-feature engineering pipeline
+- Supervised GradientBoosting pick model with auto-retrain
+- Unsupervised Isolation Forest anomaly detector
+- Model drift monitoring (Page-Hinkley + PSI)
+- Closed-loop learning: predict → result → retrain
+
+### Phase 4: Daemon Microservice (NEXT)
+- [ ] Dockerized headless daemon (no human interaction needed)
+- [ ] Health check endpoints (/health/live, /health/ready, /health/metrics)
+- [ ] Prometheus metrics export (pick accuracy, model drift, API credits)
+- [ ] Graceful shutdown with state persistence
+- [ ] Watchdog auto-restart on crash
+
+### Phase 5: Data Enrichment
+- [ ] Player injury real-time feed integration
+- [ ] Weather data for outdoor sports expansion
+- [ ] Historical matchup data pipeline
+- [ ] Opening line capture (currently unavailable at scheduler runtime)
+- [ ] Public money % from Action Network or similar
+
+### Phase 6: Multi-Sport Expansion
+- [ ] NFL, MLB, NHL signal classification
+- [ ] Sport-specific feature engineering
+- [ ] League-specific thresholds and model weights
 
 ---
 

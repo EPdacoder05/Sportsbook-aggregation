@@ -468,14 +468,14 @@ def main():
     
     print(f"  Processed {len(all_picks)} picks through decay engine")
 
-    # ── Step 6: Evaluate Boosts ──
+    # ── Step 6/8: Evaluate Boosts ──
     if args.boosts:
         print("\n[6/8] Evaluating profit boosts...")
         evaluate_boosts(args.boosts)
     else:
         print("\n[6/8] No boosts to evaluate")
 
-    # ── Step 7: Output ──
+    # ── Step 7/8: Output & Discord ──
     print("\n[7/8] Finalizing...")
     print_pick_card(pick_card)
     save_pick_card(pick_card)

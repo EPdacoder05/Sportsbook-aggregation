@@ -437,6 +437,7 @@ class SmartGameScheduler:
             return {}
 
         results = {}
+        classifier = SignalClassifier()  # Instantiate once, reuse per game
         window_game_teams = {
             self._normalize_team(g.home_team) for g in window.games
         }
@@ -495,7 +496,7 @@ class SmartGameScheduler:
 
             # ── Signal Classification ─────────────────────────────────
             # Construct input dicts for SignalClassifier
-            classifier = SignalClassifier()
+            # Note: classifier is instantiated once outside the loop (see below)
             
             # Note: Opening lines not always available at scheduler runtime
             # We'll use current lines and handle missing data gracefully

@@ -56,6 +56,14 @@ from engine.line_freeze_detector import LineFreezeDetector, LineSnapshot
 from engine.boost_ev import BoostCalculator
 from engine.clv_tracker import CLVTracker
 from engine.no_bet_detector import NoBetDetector
+from engine.ml.feature_engine import FeatureEngine
+from engine.ml.pick_model import PickModel
+from engine.ml.anomaly_detector import AnomalyDetector
+from engine.ml.model_monitor import ModelMonitor
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class BettingEngine:
@@ -74,6 +82,12 @@ class BettingEngine:
         self.boost_calculator = BoostCalculator()
         self.clv_tracker = CLVTracker()
         self.no_bet_detector = NoBetDetector()
+        
+        # ML/AI layer
+        self.feature_engine = FeatureEngine()
+        self.pick_model = PickModel()
+        self.anomaly_detector = AnomalyDetector()
+        self.model_monitor = ModelMonitor()
     
     def analyze_game(
         self,
@@ -199,6 +213,7 @@ class BettingEngine:
             "no_bet_result": no_bet_result.to_dict() if no_bet_result else None,
             "decay_result": decay_result.to_dict() if decay_result else None,
             "freeze_result": freeze_result.to_dict() if freeze_result else None,
+            "ml_prediction": self._ml_analyze(game_key, odds_data, signal_profile, rest_data),
             "timestamp": datetime.now().isoformat(),
         }
     
@@ -348,12 +363,26 @@ class BettingEngine:
         
         # Determine if bet won
         actual_total = final_score.get("total", 0)
+        away_score = final_score.get("away_score", 0)
+        home_score = final_score.get("home_score", 0)
+        
         if pick_type == "UNDER":
             won = actual_total < your_line
         elif pick_type == "OVER":
             won = actual_total > your_line
+        elif pick_type in ("SPREAD_AWAY", "ATS_AWAY"):
+            # Away team covers: away_score + spread > home_score
+            won = (away_score + your_line) > home_score
+        elif pick_type in ("SPREAD_HOME", "ATS_HOME"):
+            # Home team covers: home_score + spread > away_score
+            won = (home_score + your_line) > away_score
+        elif pick_type == "ML_AWAY":
+            won = away_score > home_score
+        elif pick_type == "ML_HOME":
+            won = home_score > away_score
         else:
-            won = False  # TODO: Handle spreads and MLs
+            logger.warning(f"Unknown pick_type '{pick_type}' — defaulting to LOSS")
+            won = False
         
         # Log to CLV tracker
         rec = self.clv_tracker.log_pick(
@@ -376,6 +405,131 @@ class BettingEngine:
             "closing_line": closing_line,
             "clv": rec.clv if rec.clv else 0,
             "final_score": final_score,
+        }
+
+    # ── ML/AI Layer ───────────────────────────────────────────────
+
+    def _ml_analyze(
+        self,
+        game_key: str,
+        odds_data: Optional[Dict],
+        signal_profile,
+        rest_data: Optional[Dict] = None,
+    ) -> Dict:
+        """
+        Run ML prediction + anomaly detection on a game.
+        Returns structured dict that gets merged into analyze_game output.
+        """
+        try:
+            # Build feature vector
+            context = {}
+            if rest_data:
+                context["home_rest_days"] = rest_data.get("home_rest_days", 0)
+                context["away_rest_days"] = rest_data.get("away_rest_days", 0)
+
+            features = self.feature_engine.extract(
+                odds_data=odds_data,
+                signal_profile=signal_profile,
+                context=context,
+            )
+
+            # 1. Supervised prediction
+            prediction = self.pick_model.predict(features)
+
+            # 2. Unsupervised anomaly detection
+            anomaly = self.anomaly_detector.detect(features, game_key=game_key)
+
+            # 3. Ingest for future training
+            self.anomaly_detector.ingest(features, game_key=game_key)
+
+            # 4. Log prediction for drift monitoring
+            self.model_monitor.log_prediction(
+                features=features,
+                predicted_prob=prediction["win_probability"],
+                game_key=game_key,
+            )
+
+            return {
+                "prediction": prediction,
+                "anomaly": anomaly,
+                "features_extracted": True,
+            }
+        except Exception as e:
+            logger.error(f"ML analysis failed for {game_key}: {e}")
+            return {
+                "prediction": {"win_probability": 0.5, "confidence": "ERROR"},
+                "anomaly": {"is_anomaly": False},
+                "features_extracted": False,
+                "error": str(e),
+            }
+
+    def ml_record_result(
+        self,
+        game_key: str,
+        odds_data: Optional[Dict],
+        signal_profile,
+        won: bool,
+        pick_type: str = "",
+        rest_data: Optional[Dict] = None,
+    ) -> Dict:
+        """
+        Feed game result back to the ML model for learning.
+        Called after record_result() to close the feedback loop.
+        """
+        try:
+            context = {}
+            if rest_data:
+                context["home_rest_days"] = rest_data.get("home_rest_days", 0)
+                context["away_rest_days"] = rest_data.get("away_rest_days", 0)
+
+            features = self.feature_engine.extract(
+                odds_data=odds_data,
+                signal_profile=signal_profile,
+                context=context,
+            )
+
+            # Record for supervised learning (auto-retrains when threshold met)
+            record_result = self.pick_model.record(
+                features=features,
+                won=won,
+                game_key=game_key,
+                pick_type=pick_type,
+            )
+
+            # Update drift monitor with actual result
+            self.model_monitor.log_prediction(
+                features=features,
+                predicted_prob=self.pick_model.predict(features)["win_probability"],
+                actual_won=won,
+                game_key=game_key,
+            )
+
+            # Check model health
+            health = self.model_monitor.check_health()
+            if health["drift_detected"]:
+                logger.warning(
+                    f"Model drift detected ({health['drift_type']}), "
+                    f"triggering retrain..."
+                )
+                self.pick_model.train()
+                self.model_monitor.reset_page_hinkley()
+
+            return {
+                "recorded": True,
+                "model_status": record_result,
+                "health": health,
+            }
+        except Exception as e:
+            logger.error(f"ML record failed for {game_key}: {e}")
+            return {"recorded": False, "error": str(e)}
+
+    def get_ml_status(self) -> Dict:
+        """Get status of all ML components."""
+        return {
+            "pick_model": self.pick_model.get_status(),
+            "anomaly_detector": self.anomaly_detector.get_status(),
+            "model_health": self.model_monitor.check_health(),
+            "drift_history": self.model_monitor.get_drift_history()[-5:],
         }
 
 
