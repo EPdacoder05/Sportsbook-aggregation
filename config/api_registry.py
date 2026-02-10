@@ -291,11 +291,6 @@ class APIRegistry:
             key_env_var="DISCORD_WEBHOOK_URL",  # not a key, but same pattern
         )
 
-        self.twilio = APIService(
-            name="twilio",
-            key_env_var="TWILIO_AUTH_TOKEN",
-        )
-
         self.sendgrid = APIService(
             name="sendgrid",
             key_env_var="SENDGRID_API_KEY",
@@ -306,7 +301,7 @@ class APIRegistry:
             self.odds_api, self.espn, self.twitter, self.reddit,
             self.grok, self.openai, self.action_network,
             self.draftkings, self.covers,
-            self.discord, self.twilio, self.sendgrid,
+            self.discord, self.sendgrid,
         ]
 
     # ── helpers ──────────────────────────────────────────

@@ -3,7 +3,6 @@ Unified Alert Manager
 
 Sends alerts via:
 - Discord Webhook
-- SMS (Twilio)
 - Email (SendGrid)
 """
 
@@ -11,7 +10,6 @@ from typing import Dict, Any, List, Optional
 from loguru import logger
 from config.settings import get_settings
 from alerts.discord_webhook import DiscordAlerter
-from alerts.twilio_sms import TwilioSMSAlerter
 from alerts.email_alert import EmailAlert
 
 
@@ -24,11 +22,9 @@ class AlertManager:
         
         # Initialize alerters
         self.discord: Optional[DiscordAlerter] = None
-        self.sms: Optional[TwilioSMSAlerter] = None
         self.email: Optional[EmailAlert] = None
         
         self._init_discord()
-        self._init_sms()
         self._init_email()
     
     def _init_discord(self):
@@ -44,32 +40,6 @@ class AlertManager:
                 logger.info("OK Discord alerter initialized")
             except Exception as e:
                 logger.error(f"FAIL Discord initialization: {e}")
-    
-    def _init_sms(self):
-        """Initialize SMS alerter"""
-        required_fields = [
-            'TWILIO_ACCOUNT_SID',
-            'TWILIO_AUTH_TOKEN',
-            'TWILIO_PHONE_NUMBER',
-            'ALERT_PHONE_NUMBERS'
-        ]
-        
-        if all(getattr(self.settings, field, None) for field in required_fields):
-            try:
-                # Parse phone numbers - could be list or comma-separated string
-                phone_numbers = getattr(self.settings, 'ALERT_PHONE_NUMBERS', [])
-                if isinstance(phone_numbers, str):
-                    phone_numbers = [p.strip() for p in phone_numbers.split(',')]
-                
-                self.sms = TwilioSMSAlerter(
-                    account_sid=self.settings.TWILIO_ACCOUNT_SID,
-                    auth_token=self.settings.TWILIO_AUTH_TOKEN,
-                    from_number=self.settings.TWILIO_PHONE_NUMBER,
-                    to_numbers=phone_numbers
-                )
-                logger.info("OK SMS alerter initialized")
-            except Exception as e:
-                logger.error(f"FAIL SMS initialization: {e}")
     
     def _init_email(self):
         """Initialize email alerter"""
@@ -118,17 +88,6 @@ class AlertManager:
                 logger.error(f"❌ Discord alert failed: {e}")
                 results["discord"] = False
         
-        # SMS alert (high priority only)
-        if "sms" in channels and self.sms:
-            if fade_score >= 80:
-                try:
-                    await self.sms.send(f"🔴 FADE: {game_data.get('away_team')} @ {game_data.get('home_team')} | Score: {fade_score}/100")
-                    results["sms"] = True
-                    logger.info(f"✓ SMS alert sent")
-                except Exception as e:
-                    logger.error(f"❌ SMS alert failed: {e}")
-                    results["sms"] = False
-        
         return results
     
     async def send_whale_alert(
@@ -167,18 +126,6 @@ class AlertManager:
                 logger.error(f"❌ Discord whale alert failed: {e}")
                 results["discord"] = False
         
-        # SMS alert (mega whales only)
-        if "sms" in channels and self.sms:
-            if amount >= 100000:  # $100K+
-                try:
-                    team = whale_data.get('team', 'Unknown')
-                    await self.sms.send(f"🐋 MEGA WHALE: ${amount:,.0f} on {team}")
-                    results["sms"] = True
-                    logger.info(f"✓ SMS whale alert sent")
-                except Exception as e:
-                    logger.error(f"❌ SMS whale alert failed: {e}")
-                    results["sms"] = False
-        
         return results
     
     async def send_test_alert(self) -> Dict[str, bool]:
@@ -202,15 +149,6 @@ class AlertManager:
                 logger.error(f"❌ Discord test failed: {e}")
                 results["discord"] = False
         
-        if self.sms:
-            try:
-                await self.sms.send("🧪 HOUSE EDGE TEST - Alerts working!")
-                results["sms"] = True
-                logger.info("✓ SMS test alert sent successfully")
-            except Exception as e:
-                logger.error(f"❌ SMS test failed: {e}")
-                results["sms"] = False
-        
         if self.email:
             try:
                 await self.email.send("Test Alert", test_message)
@@ -231,6 +169,5 @@ class AlertManager:
         """
         return {
             "discord": self.discord is not None,
-            "sms": self.sms is not None,
             "email": self.email is not None
         }

@@ -95,7 +95,6 @@ Output
 | `pick_notifier.py` | Sends pick cards and reports to Discord via webhook. |
 | `discord_webhook.py` | Low-level Discord webhook sender. |
 | `email_alert.py` | Email alert support. |
-| `twilio_sms.py` | SMS alert support via Twilio. |
 
 ---
 
@@ -261,10 +260,6 @@ Copy `.env.example` to `.env` and fill in:
 |----------|----------|-------------|
 | `ODDS_API_KEY` | Yes | The Odds API key (500 free credits/month) |
 | `DISCORD_WEBHOOK_URL` | No | Discord webhook for pick notifications |
-| `TWILIO_SID` | No | Twilio Account SID for SMS alerts |
-| `TWILIO_TOKEN` | No | Twilio Auth Token |
-| `TWILIO_FROM` | No | Twilio sender phone number |
-| `TWILIO_TO` | No | SMS recipient phone number |
 | `EMAIL_USER` | No | Email address for email alerts |
 | `EMAIL_PASS` | No | Email password / app password |
 | `DATABASE_URL` | No | PostgreSQL connection string |

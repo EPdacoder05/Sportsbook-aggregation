@@ -51,20 +51,6 @@ class Settings(BaseSettings):
     # Google Cloud Vision (OCR)
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None
     
-    # Twilio (SMS)
-    TWILIO_ACCOUNT_SID: str = ""
-    TWILIO_AUTH_TOKEN: str = ""
-    TWILIO_PHONE_NUMBER: str = ""
-    ALERT_PHONE_NUMBERS: Union[str, List[str]] = []
-    
-    @field_validator('ALERT_PHONE_NUMBERS', mode='before')
-    @classmethod
-    def parse_phone_numbers(cls, v):
-        """Parse comma-separated phone numbers"""
-        if isinstance(v, str):
-            return [p.strip() for p in v.split(",") if p.strip()]
-        return v or []
-    
     # Discord
     DISCORD_WEBHOOK_URL: str = ""
     DISCORD_HIGH_ALERT_WEBHOOK: str = ""
