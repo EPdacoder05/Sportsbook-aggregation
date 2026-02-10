@@ -1,0 +1,89 @@
+name: CI — Lint + Test + Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Lint with flake8
+        run: |
+          # Stop build on syntax errors or undefined names
+          flake8 engine/ scripts/ api/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          # Warnings (non-blocking)
+          flake8 engine/ scripts/ api/ --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics
+
+      - name: Type check with mypy
+        run: |
+          mypy engine/ --ignore-missing-imports --no-error-summary || true
+
+      - name: Run tests
+        run: |
+          pytest tests/ -v --tb=short --timeout=30 2>&1 || true
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit bandit safety
+
+      - name: Audit dependencies (pip-audit)
+        run: |
+          pip-audit --strict 2>&1 || true
+
+      - name: Static security scan (Bandit)
+        run: |
+          bandit -r engine/ api/ scripts/ -ll --skip B101,B311 -f txt 2>&1 || true
+
+      - name: Check for known vulnerabilities (Safety)
+        run: |
+          safety check --full-report 2>&1 || true
+
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:python"

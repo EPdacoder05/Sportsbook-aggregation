@@ -1,226 +1,351 @@
 """
-LIVE GAME MONITOR - Real-time score tracking and line adjustment
-Updates signals as games progress, just like Vegas adjusts odds
+LIVE GAME MONITOR — Real-Time ESPN Score Tracking
+====================================================
+Replaces hardcoded stubs with real ESPN API integration.
+
+Features:
+  • Fetches live scores from ESPN free API (no key needed)
+  • Tracks pick survival (Under/Over/Spread)
+  • Pace projection for totals
+  • Blowout / hedge alerts
+  • Continuous monitoring with configurable interval
+
+Usage:
+    python engine/live_game_monitor.py                   # One-shot dashboard
+    python engine/live_game_monitor.py --continuous       # Live loop (30s)
+    python engine/live_game_monitor.py --date 20260209    # Specific date
 """
 
 import asyncio
-import aiohttp
+import json
 import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional
 import sys
-sys.path.insert(0, '/app')
+import os
+import argparse
+import requests
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Dict, List, Optional
 
-from database.db import SessionLocal
-from database.models import Game, Signal, OddsSnapshot
-from sqlalchemy import and_
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
 logger = logging.getLogger(__name__)
 
+DATA_DIR = Path(__file__).parent.parent / "data"
+ESPN_NBA_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+
+# ── ESPN LIVE SCORES ──────────────────────────────────────────────────
 
 class LiveGameMonitor:
-    """
-    Monitors live games and adjusts recommendations in real-time
-    Like Vegas: When score changes dramatically, update the edge
-    """
-    
-    def __init__(self):
-        self.db = SessionLocal()
-        self.live_games = {}
-        self.update_interval = 30  # Check every 30 seconds
-        
-    def get_live_games(self) -> List[Game]:
-        """Get games currently in progress"""
-        now = datetime.utcnow()
-        
-        # Games that started in last 4 hours and aren't marked complete
-        recent_start = now - timedelta(hours=4)
-        
-        return self.db.query(Game).filter(
-            and_(
-                Game.game_time <= now,
-                Game.game_time >= recent_start,
-                Game.status.in_(['in_progress', 'scheduled'])
-            )
-        ).all()
-    
-    async def fetch_live_score(self, game_id: int, sport: str) -> Optional[Dict]:
+    """Real-time game monitor using ESPN free API."""
+
+    def __init__(self, update_interval: int = 30):
+        self.update_interval = update_interval  # seconds between polls
+        self.previous_scores: Dict[str, Dict] = {}
+
+    # ── Core: fetch live scores ──────────────────────────────────────
+
+    def fetch_live_scores(self, date_str: Optional[str] = None) -> List[Dict]:
         """
-        Fetch live score from API
-        In production: Connect to ESPN API, The Score, etc.
-        For now: Return simulated live data
+        Fetch live / today's scores from ESPN.
+        Returns list of parsed game dicts.
         """
+        params = {}
+        if date_str:
+            params["dates"] = date_str
+
         try:
-            # Simulate live score updates
-            # In production, replace with actual API call
+            resp = requests.get(ESPN_NBA_URL, params=params, headers=HEADERS, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            logger.error(f"ESPN fetch failed: {e}")
+            return []
+
+        games = []
+        for event in data.get("events", []):
+            parsed = self._parse_espn_event(event)
+            if parsed:
+                games.append(parsed)
+        return games
+
+    def _parse_espn_event(self, event: dict) -> Optional[Dict]:
+        """Parse a single ESPN event into a flat dict."""
+        try:
+            comp = event["competitions"][0]
+            status_obj = event.get("status", {})
+            status_type = status_obj.get("type", {})
+            status_detail = status_obj.get("displayClock", "")
+            period = status_obj.get("period", 0)
+            state = status_type.get("state", "pre")  # pre | in | post
+            status_name = status_type.get("name", "")
+
+            teams = comp.get("competitors", [])
+            if len(teams) < 2:
+                return None
+
+            home = next((t for t in teams if t["homeAway"] == "home"), teams[0])
+            away = next((t for t in teams if t["homeAway"] == "away"), teams[1])
+
+            home_team = home["team"]["abbreviation"]
+            away_team = away["team"]["abbreviation"]
+            home_score = int(home.get("score", 0))
+            away_score = int(away.get("score", 0))
+
             return {
-                'game_id': game_id,
-                'status': 'in_progress',
-                'quarter': 3,
-                'time_remaining': '8:42',
-                'home_score': 24,
-                'away_score': 17,
-                'last_play': 'TD - Home team',
-                'momentum': 'home',  # Which team has momentum
-                'injuries': [],  # List of injured players
-                'live_spread': -10.5,  # Current live spread
+                "espn_id": event.get("id"),
+                "name": event.get("name", f"{away_team} @ {home_team}"),
+                "short": event.get("shortName", f"{away_team} @ {home_team}"),
+                "home_team": home_team,
+                "away_team": away_team,
+                "home_score": home_score,
+                "away_score": away_score,
+                "total": home_score + away_score,
+                "spread_result": home_score - away_score,
+                "quarter": period,
+                "clock": status_detail,
+                "state": state,
+                "status": status_name,
+                "completed": state == "post",
+                "in_progress": state == "in",
             }
-        except Exception as e:
-            logger.error(f"Error fetching live score: {e}")
+        except (KeyError, IndexError, TypeError) as e:
+            logger.debug(f"Parse error: {e}")
             return None
-    
-    def analyze_live_situation(self, game: Game, live_data: Dict) -> Dict:
+
+    # ── Pick survival analysis ───────────────────────────────────────
+
+    def load_todays_picks(self) -> List[Dict]:
+        """Load pick files for today from data/."""
+        today = datetime.now().strftime("%Y%m%d")
+        picks: List[Dict] = []
+        for f in sorted(DATA_DIR.glob(f"picks_{today}*.json")):
+            try:
+                with open(f) as fh:
+                    loaded = json.load(fh)
+                    if isinstance(loaded, list):
+                        picks.extend(loaded)
+            except Exception:
+                pass
+        return picks
+
+    def analyze_pick_survival(self, pick: Dict, game: Dict) -> Dict:
         """
-        Analyze if current game situation changes our recommendation
-        
-        Key factors:
-        - Score differential vs original spread
-        - Momentum shifts
-        - Key injuries
-        - Time remaining
+        Analyze whether a pick is still alive given live game state.
+        Supports UNDER, OVER, SPREAD.
         """
-        try:
-            # Get original signal for this game
-            signal = self.db.query(Signal).filter(
-                and_(
-                    Signal.game_id == game.id,
-                    Signal.expires_at > datetime.utcnow()
-                )
-            ).first()
-            
-            if not signal:
-                return {'action': 'no_signal', 'recommendation': 'No active signal'}
-            
-            # Get original spread
-            odds = self.db.query(OddsSnapshot).filter(
-                OddsSnapshot.game_id == game.id
-            ).order_by(OddsSnapshot.snapshot_time.desc()).first()
-            
-            if not odds:
-                return {'action': 'no_odds'}
-            
-            original_spread = abs(odds.home_spread or 0)
-            current_margin = abs(live_data['home_score'] - live_data['away_score'])
-            
-            # SCENARIO 1: Blowout forming (margin > spread + 14)
-            if current_margin > original_spread + 14:
-                return {
-                    'action': 'ALERT_BLOWOUT',
-                    'game': f"{game.away_team} @ {game.home_team}",
-                    'original_pick': signal.recommendation,
-                    'current_score': f"{live_data['home_score']}-{live_data['away_score']}",
-                    'recommendation': '🚨 BLOWOUT ALERT - Consider hedging or live betting opposite',
-                    'confidence': 'LOW',
-                    'reason': f'Margin ({current_margin}) exceeds spread by {current_margin - original_spread:.1f}'
-                }
-            
-            # SCENARIO 2: Close game (still within spread + 3)
-            if current_margin <= original_spread + 3:
-                return {
-                    'action': 'HOLD',
-                    'game': f"{game.away_team} @ {game.home_team}",
-                    'current_score': f"{live_data['home_score']}-{live_data['away_score']}",
-                    'recommendation': '✅ Pick still alive - HOLD position',
-                    'confidence': 'MEDIUM'
-                }
-            
-            # SCENARIO 3: Comfortable cover forming
-            underdog_covering = current_margin < original_spread - 3
-            if underdog_covering:
-                return {
-                    'action': 'GOOD',
-                    'game': f"{game.away_team} @ {game.home_team}",
-                    'current_score': f"{live_data['home_score']}-{live_data['away_score']}",
-                    'recommendation': '🟢 Underdog covering - Looking good!',
-                    'confidence': 'HIGH'
-                }
-            
-            # SCENARIO 4: Key injury detected
-            if live_data.get('injuries'):
-                return {
-                    'action': 'ALERT_INJURY',
-                    'game': f"{game.away_team} @ {game.home_team}",
-                    'injuries': live_data['injuries'],
-                    'recommendation': '⚠️ Key injury - Monitor situation',
-                    'confidence': 'REDUCED'
-                }
-            
-            return {'action': 'MONITOR', 'recommendation': 'Continue monitoring'}
-            
-        except Exception as e:
-            logger.error(f"Error analyzing game {game.id}: {e}")
-            return {'action': 'ERROR'}
-    
-    def update_signal_confidence(self, signal: Signal, live_situation: Dict):
-        """Adjust signal confidence based on live game state"""
-        if live_situation['action'] == 'ALERT_BLOWOUT':
-            # Lower confidence dramatically
-            signal.confidence = 0.25
-            signal.reasoning += f" | LIVE UPDATE: {live_situation['recommendation']}"
-            self.db.commit()
-            logger.warning(f"⚠️ {live_situation['game']}: Confidence lowered to 25%")
-        
-        elif live_situation['action'] == 'GOOD':
-            # Increase confidence
-            signal.confidence = min(0.95, signal.confidence + 0.15)
-            self.db.commit()
-            logger.info(f"✅ {live_situation['game']}: Confidence increased to {signal.confidence:.0%}")
-    
-    async def monitor_live_games(self):
-        """Main monitoring loop - runs continuously during game days"""
-        logger.info("🚀 Live Game Monitor started")
-        
+        pick_str = (pick.get("pick") or "").upper()
+        result = {
+            "pick": pick.get("pick"),
+            "game": game["short"],
+            "score": f"{game['away_score']}-{game['home_score']}",
+            "quarter": game["quarter"],
+            "clock": game["clock"],
+            "status": "UNKNOWN",
+            "detail": "",
+        }
+
+        total = game["total"]
+        quarter = game["quarter"] or 1
+        completed = game["completed"]
+
+        # Pace projection
+        if game["in_progress"] and quarter > 0:
+            elapsed_quarters = quarter - 1 + (1 if game["clock"] != "12:00" else 0)
+            if elapsed_quarters > 0:
+                pace = (total / max(elapsed_quarters, 0.5)) * 4
+            else:
+                pace = 0
+        else:
+            pace = total
+
+        if "UNDER" in pick_str:
+            try:
+                line = float(pick_str.split("UNDER")[1].strip())
+            except (ValueError, IndexError):
+                result["status"] = "PARSE_ERROR"
+                return result
+
+            if completed:
+                result["status"] = "WON" if total < line else "LOST"
+                result["detail"] = f"Final {total} vs line {line}"
+            else:
+                margin = line - total
+                result["detail"] = f"Pace: {pace:.0f} | Need <{line} | Currently {total} ({margin:+.1f} cushion)"
+                if pace < line - 5:
+                    result["status"] = "LOOKING_GOOD"
+                elif pace > line + 5:
+                    result["status"] = "IN_DANGER"
+                else:
+                    result["status"] = "SWEATING"
+
+        elif "OVER" in pick_str:
+            try:
+                line = float(pick_str.split("OVER")[1].strip())
+            except (ValueError, IndexError):
+                result["status"] = "PARSE_ERROR"
+                return result
+
+            if completed:
+                result["status"] = "WON" if total > line else "LOST"
+                result["detail"] = f"Final {total} vs line {line}"
+            else:
+                result["detail"] = f"Pace: {pace:.0f} | Need >{line} | Currently {total}"
+                if pace > line + 5:
+                    result["status"] = "LOOKING_GOOD"
+                elif pace < line - 5:
+                    result["status"] = "IN_DANGER"
+                else:
+                    result["status"] = "SWEATING"
+
+        elif "+" in pick_str or "-" in pick_str:
+            # Spread pick
+            try:
+                if "+" in pick_str:
+                    parts = pick_str.split("+")
+                    spread = float(parts[1].strip())
+                else:
+                    parts = pick_str.split("-")
+                    spread = -float(parts[1].strip())
+                team_abbr = parts[0].strip()
+            except (ValueError, IndexError):
+                result["status"] = "PARSE_ERROR"
+                return result
+
+            diff = game["spread_result"]  # home - away (positive = home winning)
+            # If our pick is the away team
+            if team_abbr == game["away_team"]:
+                adjusted = -diff + spread  # positive = covering
+            else:
+                adjusted = diff + spread
+
+            if completed:
+                result["status"] = "WON" if adjusted > 0 else "LOST"
+                result["detail"] = f"Covered by {adjusted:+.1f}"
+            else:
+                result["detail"] = f"Currently {adjusted:+.1f} vs spread"
+                result["status"] = "COVERING" if adjusted > 0 else "NOT_COVERING"
+
+        return result
+
+    # ── Dashboard ────────────────────────────────────────────────────
+
+    def print_dashboard(self, games: List[Dict], picks: Optional[List[Dict]] = None):
+        """Print a live scoreboard dashboard to stdout."""
+        print()
+        print("═" * 72)
+        print(f"  🏀 LIVE SCOREBOARD — {datetime.now().strftime('%I:%M:%S %p ET')}")
+        print("═" * 72)
+
+        live = [g for g in games if g["in_progress"]]
+        final = [g for g in games if g["completed"]]
+        pre = [g for g in games if g["state"] == "pre"]
+
+        if live:
+            print(f"\n  🔴 IN PROGRESS ({len(live)})")
+            for g in live:
+                print(f"    {g['away_team']} {g['away_score']}  @  "
+                      f"{g['home_team']} {g['home_score']}   "
+                      f"Q{g['quarter']} {g['clock']}")
+
+        if final:
+            print(f"\n  ✅ FINAL ({len(final)})")
+            for g in final:
+                winner = g['home_team'] if g['home_score'] > g['away_score'] else g['away_team']
+                print(f"    {g['away_team']} {g['away_score']}  @  "
+                      f"{g['home_team']} {g['home_score']}   "
+                      f"({winner} wins)")
+
+        if pre:
+            print(f"\n  🟢 UPCOMING ({len(pre)})")
+            for g in pre:
+                print(f"    {g['away_team']}  @  {g['home_team']}   "
+                      f"({g.get('status', 'scheduled')})")
+
+        # Pick survival
+        if picks:
+            active_games = {g["short"]: g for g in games if g["in_progress"] or g["completed"]}
+            print(f"\n  📋 PICK SURVIVAL")
+            for pick in picks:
+                # Try to match pick to a live game
+                for key, game in active_games.items():
+                    pick_game = (pick.get("game") or "").upper()
+                    if (game["home_team"] in pick_game or
+                            game["away_team"] in pick_game):
+                        survival = self.analyze_pick_survival(pick, game)
+                        icon = {
+                            "WON": "✅", "LOST": "❌",
+                            "LOOKING_GOOD": "🟢", "IN_DANGER": "🔴",
+                            "SWEATING": "🟡", "COVERING": "🟢",
+                            "NOT_COVERING": "🔴",
+                        }.get(survival["status"], "⚪")
+                        print(f"    {icon} {survival['pick']:<25} "
+                              f"{survival['status']:<14} {survival['detail']}")
+                        break
+
+        if not games:
+            print("\n  No games found for today.")
+
+        print("\n" + "═" * 72)
+
+    # ── Continuous loop ──────────────────────────────────────────────
+
+    async def run_continuous(self, date_str: Optional[str] = None):
+        """Run the monitor in a continuous loop."""
+        logger.info(f"🚀 Live Game Monitor started (interval: {self.update_interval}s)")
+        picks = self.load_todays_picks()
+        if picks:
+            logger.info(f"📋 Loaded {len(picks)} picks for today")
+
         try:
             while True:
-                # Get games in progress
-                live_games = self.get_live_games()
-                
-                if not live_games:
-                    logger.info("No live games currently")
-                    await asyncio.sleep(60)
-                    continue
-                
-                logger.info(f"📊 Monitoring {len(live_games)} live games...")
-                
-                for game in live_games:
-                    # Fetch live data
-                    live_data = await self.fetch_live_score(game.id, game.sport)
-                    
-                    if not live_data:
-                        continue
-                    
-                    # Analyze situation
-                    situation = self.analyze_live_situation(game, live_data)
-                    
-                    # Log important updates
-                    if situation['action'] in ['ALERT_BLOWOUT', 'ALERT_INJURY', 'GOOD']:
-                        logger.warning(f"🔥 {situation['game']}: {situation['recommendation']}")
-                    
-                    # Update signal if needed
-                    signal = self.db.query(Signal).filter(
-                        Signal.game_id == game.id
-                    ).first()
-                    
-                    if signal:
-                        self.update_signal_confidence(signal, situation)
-                
-                # Wait 30 seconds before next check
+                games = self.fetch_live_scores(date_str)
+                self.print_dashboard(games, picks)
+
+                # Check if all games are final
+                if games and all(g["completed"] for g in games):
+                    logger.info("All games completed. Monitor stopping.")
+                    break
+
+                # If no games in progress and none upcoming, stop
+                if games and not any(g["in_progress"] or g["state"] == "pre" for g in games):
+                    logger.info("No more live or upcoming games. Monitor stopping.")
+                    break
+
                 await asyncio.sleep(self.update_interval)
-                
+
         except KeyboardInterrupt:
-            logger.info("Monitor stopped")
-        except Exception as e:
-            logger.error(f"Monitor error: {e}")
-        finally:
-            self.db.close()
+            logger.info("Monitor stopped by user.")
 
 
-async def main():
-    """Start live monitoring"""
-    monitor = LiveGameMonitor()
-    await monitor.monitor_live_games()
+# ── CLI ───────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(description="Live Game Monitor")
+    parser.add_argument("--continuous", action="store_true",
+                        help="Run in continuous monitoring mode")
+    parser.add_argument("--date", type=str, default=None,
+                        help="ESPN date (YYYYMMDD). Default: today")
+    parser.add_argument("--interval", type=int, default=30,
+                        help="Seconds between polls (default: 30)")
+    args = parser.parse_args()
+
+    monitor = LiveGameMonitor(update_interval=args.interval)
+
+    if args.continuous:
+        asyncio.run(monitor.run_continuous(args.date))
+    else:
+        games = monitor.fetch_live_scores(args.date)
+        picks = monitor.load_todays_picks()
+        monitor.print_dashboard(games, picks)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

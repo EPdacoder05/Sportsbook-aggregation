@@ -4,12 +4,16 @@ HOUSE EDGE - FastAPI Application
 Main entry point for the API
 """
 
-from fastapi import FastAPI, Depends, HTTPException, status, Body
+from fastapi import FastAPI, Depends, HTTPException, status, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import List
 from datetime import datetime, timedelta
 from loguru import logger
+import time
+import os
+from collections import defaultdict
 
 from database import get_db, init_db, Game, Signal, WhaleBet, Sport
 from scheduler.jobs import start_scheduler
@@ -22,6 +26,14 @@ from config import get_settings
 # Initialize settings
 settings = get_settings()
 
+# ── API Key Auth ──────────────────────────────────────────────────────
+API_KEY = os.getenv("HOUSE_EDGE_API_KEY", "")  # Set in .env for production
+
+# ── Rate Limiting ─────────────────────────────────────────────────────
+RATE_LIMIT_WINDOW = 60   # seconds
+RATE_LIMIT_MAX = 60      # requests per window
+_rate_store: dict = defaultdict(list)  # ip -> [timestamps]
+
 # Create FastAPI app
 app = FastAPI(
     title="HOUSE EDGE API",
@@ -31,14 +43,56 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# CORS middleware
+# CORS middleware — locked to known origins
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8501").split(",")
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key"],
 )
+
+
+# ── Security Middleware ───────────────────────────────────────────────
+
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    """Rate limiting + API key enforcement on write endpoints."""
+    client_ip = request.client.host if request.client else "unknown"
+
+    # 1. Rate limiting
+    now = time.time()
+    _rate_store[client_ip] = [
+        t for t in _rate_store[client_ip] if t > now - RATE_LIMIT_WINDOW
+    ]
+    if len(_rate_store[client_ip]) >= RATE_LIMIT_MAX:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded. Try again later."},
+        )
+    _rate_store[client_ip].append(now)
+
+    # 2. API key enforcement on mutation endpoints
+    if request.method == "POST" and API_KEY:
+        api_key = request.headers.get("X-API-Key", "")
+        if api_key != API_KEY:
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Invalid or missing API key."},
+            )
+
+    # 3. Security headers
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
 
 
 @app.on_event("startup")

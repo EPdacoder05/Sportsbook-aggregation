@@ -397,6 +397,43 @@ def main():
     # Generate report
     generate_autopsy_report(graded, date_str)
 
+    # ── ML FEEDBACK LOOP ──────────────────────────────────────────────
+    # Feed graded results back to the ML model so it learns from outcomes
+    graded_only = [p for p in graded if p.get("graded") and p.get("won") is not None]
+    if graded_only:
+        try:
+            from engine.betting_engine import BettingEngine
+            engine = BettingEngine()
+            ml_fed = 0
+            for p in graded_only:
+                try:
+                    engine.ml_record_result(
+                        pick_data={
+                            "game": p.get("game", ""),
+                            "pick": p.get("pick", ""),
+                            "tier": p.get("tier", ""),
+                            "confidence": p.get("confidence", 50),
+                            "signals": p.get("signals", p.get("signal_types", [])),
+                            "line": p.get("line", 0),
+                            "units": p.get("units", 1.0),
+                        },
+                        won=p["won"],
+                    )
+                    ml_fed += 1
+                except Exception as exc:
+                    print(f"  ⚠️  ML feedback failed for {p.get('pick', '?')}: {exc}")
+            print(f"\n  🤖 ML Feedback: {ml_fed}/{len(graded_only)} results fed to model")
+            if ml_fed >= 50:
+                try:
+                    engine.ml_retrain()
+                    print("  🔄 ML model retrained with new data!")
+                except Exception as exc:
+                    print(f"  ⚠️  ML retrain skipped: {exc}")
+        except ImportError:
+            print("  ⚠️  ML feedback skipped — BettingEngine not available")
+        except Exception as e:
+            print(f"  ⚠️  ML feedback loop error: {e}")
+
 
 if __name__ == "__main__":
     main()

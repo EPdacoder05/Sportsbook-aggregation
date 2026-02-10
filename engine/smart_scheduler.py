@@ -389,8 +389,43 @@ class SmartGameScheduler:
                 "oddsFormat": "american",
             }
 
-            resp = requests.get(url, params=params, headers=HEADERS, timeout=15)
-            resp.raise_for_status()
+            MAX_RETRIES = 3
+            BACKOFF_BASE = 2  # seconds
+            last_err = None
+
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    resp = requests.get(url, params=params, headers=HEADERS, timeout=15)
+                    resp.raise_for_status()
+                    break  # success
+                except requests.exceptions.HTTPError as e:
+                    last_err = e
+                    status_code = getattr(e.response, "status_code", 0)
+                    # Don't retry 401/403 (auth) or 422 (bad request)
+                    if status_code in (401, 403, 422):
+                        logger.error(f"   ❌ Non-retryable HTTP {status_code}: {e}")
+                        return None
+                    wait = BACKOFF_BASE ** attempt
+                    logger.warning(
+                        f"   ⚠️  Attempt {attempt}/{MAX_RETRIES} failed "
+                        f"(HTTP {status_code}). Retrying in {wait}s…"
+                    )
+                    time.sleep(wait)
+                except (requests.exceptions.ConnectionError,
+                        requests.exceptions.Timeout) as e:
+                    last_err = e
+                    wait = BACKOFF_BASE ** attempt
+                    logger.warning(
+                        f"   ⚠️  Attempt {attempt}/{MAX_RETRIES} — "
+                        f"{type(e).__name__}. Retrying in {wait}s…"
+                    )
+                    time.sleep(wait)
+            else:
+                # All retries exhausted
+                logger.error(
+                    f"   ❌ Odds fetch failed after {MAX_RETRIES} attempts: {last_err}"
+                )
+                return None
 
             # Record credit usage
             self.credit_tracker.record_call(
