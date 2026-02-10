@@ -56,6 +56,9 @@ from engine.line_freeze_detector import LineFreezeDetector, LineSnapshot
 from engine.boost_ev import BoostCalculator
 from engine.clv_tracker import CLVTracker
 from engine.no_bet_detector import NoBetDetector
+from engine.quarter_line_detector import QuarterLineDetector
+from engine.star_absence_detector import StarAbsenceDetector
+from engine.parlay_tracker import ParlayTracker
 from engine.ml.feature_engine import FeatureEngine
 from engine.ml.pick_model import PickModel
 from engine.ml.anomaly_detector import AnomalyDetector
@@ -82,6 +85,9 @@ class BettingEngine:
         self.boost_calculator = BoostCalculator()
         self.clv_tracker = CLVTracker()
         self.no_bet_detector = NoBetDetector()
+        self.quarter_detector = QuarterLineDetector()
+        self.star_detector = StarAbsenceDetector()
+        self.parlay_tracker = ParlayTracker()
         
         # ML/AI layer
         self.feature_engine = FeatureEngine()

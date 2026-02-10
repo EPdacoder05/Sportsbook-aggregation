@@ -458,3 +458,239 @@ class TestCreditTracker:
     def test_initial_remaining(self):
         """Should start with 500 credits."""
         assert self.tracker.remaining >= 0
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Quarter-Line Detector Tests
+# ═══════════════════════════════════════════════════════════════════
+
+class TestQuarterLineDetector:
+    """Test quarter-line mismatch detection (learned from $38 DET/CHA 1Q loss)."""
+
+    def setup_method(self):
+        from engine.quarter_line_detector import QuarterLineDetector
+        self.detector = QuarterLineDetector()
+
+    def test_instantiates(self):
+        assert self.detector is not None
+
+    def test_mismatch_detected(self):
+        """Full-game drops 5pts but Q1 barely moves → QUARTER_MISMATCH."""
+        result = self.detector.detect(
+            game_key="DET @ CHA",
+            full_game_open=222.5,
+            full_game_current=218.0,
+            quarter_open=55.0,
+            quarter_current=54.5,
+        )
+        assert result.signal.value == "QUARTER_MISMATCH"
+        assert result.q1_bet_safe is False
+        assert "NO-BET" in result.recommendation.upper() or "mismatch" in result.recommendation.lower()
+
+    def test_aligned_lines(self):
+        """Both full-game and Q1 lines move proportionally → QUARTER_ALIGNED."""
+        result = self.detector.detect(
+            game_key="CHI @ BKN",
+            full_game_open=223.0,
+            full_game_current=218.0,
+            quarter_open=56.0,
+            quarter_current=53.0,
+        )
+        assert result.signal.value in ("QUARTER_ALIGNED", "NONE")
+        assert result.q1_bet_safe is True
+
+    def test_no_movement(self):
+        """No line movement at all → NONE."""
+        result = self.detector.detect(
+            game_key="MIA @ UTA",
+            full_game_open=220.0,
+            full_game_current=220.0,
+            quarter_open=55.0,
+            quarter_current=55.0,
+        )
+        assert result.signal.value in ("NONE", "QUARTER_ALIGNED")
+
+    def test_batch_detect(self):
+        """Batch detection should return results for each game."""
+        games = [
+            {"game_key": "G1", "full_game_open": 222, "full_game_current": 218,
+             "quarter_open": 55, "quarter_current": 54.5},
+            {"game_key": "G2", "full_game_open": 220, "full_game_current": 220,
+             "quarter_open": 55, "quarter_current": 55},
+        ]
+        results = self.detector.batch_detect(games)
+        assert len(results) == 2
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Star Absence Detector Tests
+# ═══════════════════════════════════════════════════════════════════
+
+class TestStarAbsenceDetector:
+    """Test star absence detection (learned from SGA/Curry/Ja/Giannis/Luka all OUT)."""
+
+    def setup_method(self):
+        from engine.star_absence_detector import StarAbsenceDetector
+        self.detector = StarAbsenceDetector()
+
+    def test_instantiates(self):
+        assert self.detector is not None
+
+    def test_single_star_out(self):
+        """One star OUT → STAR_OUT signal with Under boost."""
+        result = self.detector.detect_from_manual_report(
+            game_key="OKC @ LAL",
+            players_out=["Shai Gilgeous-Alexander"],
+        )
+        assert result.signal.value == "STAR_OUT"
+        assert result.under_boost > 0
+        assert "Shai Gilgeous-Alexander" in result.players_out
+
+    def test_multi_star_out(self):
+        """Two stars OUT in same game → MULTI_STAR_OUT."""
+        result = self.detector.detect_from_manual_report(
+            game_key="MEM @ GS",
+            players_out=["Ja Morant", "Stephen Curry"],
+        )
+        assert result.signal.value == "MULTI_STAR_OUT"
+        assert result.under_boost > 0.10  # Big boost
+        assert len(result.players_out) == 2
+
+    def test_no_stars_out(self):
+        """No star absences → NONE."""
+        result = self.detector.detect_from_manual_report(
+            game_key="BOS @ PHI",
+            players_out=["Random Benchwarmer"],
+        )
+        assert result.signal.value == "NONE"
+
+    def test_gtd_player(self):
+        """GTD player → lower impact than OUT."""
+        result = self.detector.detect_from_manual_report(
+            game_key="MIL @ ORL",
+            players_out=[],
+            players_gtd=["Giannis Antetokounmpo"],
+        )
+        assert result.signal.value in ("STAR_GTD", "NONE")
+
+    def test_star_impact_database(self):
+        """Verify star impact database has entries."""
+        from engine.star_absence_detector import STAR_IMPACT
+        assert len(STAR_IMPACT) >= 15
+        # Check a known star
+        assert "Luka Doncic" in STAR_IMPACT or "Luka Dončić" in STAR_IMPACT
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Parlay Tracker Tests
+# ═══════════════════════════════════════════════════════════════════
+
+class TestParlayTracker:
+    """Test parlay survival tracking and hedge calculations."""
+
+    def setup_method(self):
+        from engine.parlay_tracker import ParlayTracker, ParlayLeg, Parlay, LegStatus
+        self.ParlayLeg = ParlayLeg
+        self.Parlay = Parlay
+        self.LegStatus = LegStatus
+
+        # Create tracker with temp file (no persistence in tests)
+        import tempfile
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self.tmp.close()
+        self.tracker = ParlayTracker(data_file=Path(self.tmp.name))
+        self.tracker.parlays = []
+
+    def teardown_method(self):
+        try:
+            os.unlink(self.tmp.name)
+        except Exception:
+            pass
+
+    def test_instantiates(self):
+        assert self.tracker is not None
+
+    def test_add_parlay(self):
+        """Adding a parlay should persist and increase count."""
+        self.tracker.add_parlay(
+            parlay_id="TEST_3PICK",
+            wager=10.0,
+            to_pay=100.0,
+            legs=[
+                self.ParlayLeg("CLE ML", "CLE @ DEN", "ML", team="CLE"),
+                self.ParlayLeg("Under 220", "CHI @ BKN", "TOTAL_UNDER", 220),
+                self.ParlayLeg("DET ML", "DET @ CHA", "ML", team="DET"),
+            ],
+        )
+        assert len(self.tracker.parlays) == 1
+
+    def test_leg_update(self):
+        """Updating a leg should change its status."""
+        self.tracker.add_parlay(
+            parlay_id="TEST_UPD",
+            wager=5.0,
+            to_pay=50.0,
+            legs=[
+                self.ParlayLeg("CLE ML", "CLE @ DEN", "ML", team="CLE"),
+                self.ParlayLeg("DET ML", "DET @ CHA", "ML", team="DET"),
+            ],
+        )
+        self.tracker.update_leg("DET", "WON", "Final: 110-104")
+
+        det_leg = [l for l in self.tracker.parlays[0].legs if "DET" in l.description][0]
+        assert det_leg.status == self.LegStatus.WON
+
+    def test_parlay_alive_status(self):
+        """Parlay with WON legs and PENDING legs should be ALIVE."""
+        from engine.parlay_tracker import ParlayStatus
+        self.tracker.add_parlay(
+            parlay_id="ALIVE_TEST",
+            wager=10.0,
+            to_pay=200.0,
+            legs=[
+                self.ParlayLeg("CLE ML", "CLE @ DEN", "ML", team="CLE"),
+                self.ParlayLeg("DET ML", "DET @ CHA", "ML", team="DET"),
+            ],
+        )
+        self.tracker.update_leg("DET", "WON")
+        assert self.tracker.parlays[0].status == ParlayStatus.ALIVE
+
+    def test_parlay_lost_status(self):
+        """Parlay with any LOST leg should be LOST."""
+        from engine.parlay_tracker import ParlayStatus
+        self.tracker.add_parlay(
+            parlay_id="LOST_TEST",
+            wager=10.0,
+            to_pay=200.0,
+            legs=[
+                self.ParlayLeg("CLE ML", "CLE @ DEN", "ML", team="CLE"),
+                self.ParlayLeg("DET ML", "DET @ CHA", "ML", team="DET"),
+            ],
+        )
+        self.tracker.update_leg("CLE", "LOST")
+        assert self.tracker.parlays[0].status == ParlayStatus.LOST
+
+    def test_hedge_calculation(self):
+        """Hedge math should return valid breakeven and equal-profit amounts."""
+        self.tracker.add_parlay(
+            parlay_id="HEDGE_TEST",
+            wager=10.0,
+            to_pay=200.0,
+            legs=[
+                self.ParlayLeg("CLE ML", "CLE @ DEN", "ML", team="CLE"),
+                self.ParlayLeg("DET ML", "DET @ CHA", "ML", team="DET"),
+            ],
+        )
+        self.tracker.update_leg("DET", "WON")
+
+        hedge = self.tracker.calculate_hedge("HEDGE_TEST", opposing_odds=-110)
+        assert "hedge_breakeven" in hedge
+        assert "hedge_equal_profit" in hedge
+        assert hedge["hedge_breakeven"] > 0
+        assert hedge["hedge_equal_profit"] > 0
+
+    def test_summary(self):
+        """Summary should return portfolio stats."""
+        summary = self.tracker.get_summary()
+        assert "total_parlays" in summary
+        assert "net_pnl" in summary

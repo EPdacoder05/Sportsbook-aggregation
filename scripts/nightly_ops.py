@@ -36,6 +36,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from engine.confidence_decay import ConfidenceDecayEngine
+from engine.quarter_line_detector import QuarterLineDetector
+from engine.star_absence_detector import StarAbsenceDetector
+from engine.parlay_tracker import ParlayTracker
 
 
 def load_env():
@@ -468,15 +471,56 @@ def main():
     
     print(f"  Processed {len(all_picks)} picks through decay engine")
 
-    # ── Step 6/8: Evaluate Boosts ──
+    # ── Step 6/10: Quarter-Line Sensitivity ──
+    print("\n[6/10] Scanning for quarter-line mismatches...")
+    quarter_detector = QuarterLineDetector()
+    quarter_warnings = []
+    for pick in all_picks:
+        game = pick.get("game", "")
+        if any(qt in pick.get("pick_type", "").upper() for qt in ["Q1", "1Q", "HALF", "1H", "2H"]):
+            result = quarter_detector.detect(
+                game_key=game,
+                full_game_open=pick.get("total_open", 220),
+                full_game_current=pick.get("total_current", 220),
+                quarter_open=pick.get("quarter_open"),
+                quarter_current=pick.get("quarter_current"),
+            )
+            if result.signal.value != "NONE":
+                quarter_warnings.append({"game": game, "result": result})
+                pick["quarter_warning"] = result.recommendation
+                print(f"  ⚠ {game}: {result.recommendation}")
+    if not quarter_warnings:
+        print("  No quarter-line mismatches detected")
+
+    # ── Step 7/10: Star Absence Detection ──
+    print("\n[7/10] Scanning for star absences (ESPN injuries)...")
+    star_detector = StarAbsenceDetector()
+    star_results = star_detector.analyze_slate(games)
+    star_warnings = [r for r in star_results if r.signal.value != "NONE"]
+    for sw in star_warnings:
+        out_names = ", ".join(sw.players_out)
+        print(f"  ⚠ {sw.game_key}: {out_names} OUT → Under boost {sw.under_boost:+.0%}, Spread adj {sw.spread_adjustment:+.1f}")
+    if not star_warnings:
+        print("  No star absences detected")
+
+    # ── Step 8/10: Evaluate Boosts ──
     if args.boosts:
-        print("\n[6/8] Evaluating profit boosts...")
+        print("\n[8/10] Evaluating profit boosts...")
         evaluate_boosts(args.boosts)
     else:
-        print("\n[6/8] No boosts to evaluate")
+        print("\n[8/10] No boosts to evaluate")
 
-    # ── Step 7/8: Output & Discord ──
-    print("\n[7/8] Finalizing...")
+    # ── Step 9/10: Parlay Survival Status ──
+    print("\n[9/10] Loading parlay tracker...")
+    parlay_tracker = ParlayTracker()
+    summary = parlay_tracker.get_summary()
+    if summary["total_parlays"] > 0:
+        parlay_tracker.print_survival_dashboard()
+    else:
+        print("  No active parlays tracked (add via parlay_tracker.add_parlay())")
+
+    # ── Step 10/10: Output & Discord ──
+    print("\n[10/10] Finalizing...")
     print_pick_card(pick_card)
     save_pick_card(pick_card)
     send_discord_alert(pick_card, dry_run=args.dry_run)

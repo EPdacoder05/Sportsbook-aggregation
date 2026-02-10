@@ -51,6 +51,10 @@ class SignalType(Enum):
     RLM_TOTAL = "RLM_TOTAL"
     ML_SPREAD_DIVERGENCE = "ML_SPREAD_DIVERGENCE"
     LINE_FREEZE = "LINE_FREEZE"
+    STAR_OUT = "STAR_OUT"                      # Star player(s) OUT — impacts totals + spread
+
+    # Filter signals (block a bet rather than trigger one)
+    QUARTER_MISMATCH = "QUARTER_MISMATCH"      # Q1/half lines didn't move with full-game — NO BET on quarter props
 
     # Confirmation signals
     ATS_EXTREME = "ATS_EXTREME"
@@ -67,6 +71,8 @@ SIGNAL_CATEGORIES = {
     SignalType.RLM_TOTAL: SignalCategory.PRIMARY,
     SignalType.ML_SPREAD_DIVERGENCE: SignalCategory.PRIMARY,
     SignalType.LINE_FREEZE: SignalCategory.PRIMARY,
+    SignalType.STAR_OUT: SignalCategory.PRIMARY,
+    SignalType.QUARTER_MISMATCH: SignalCategory.CONFIRMATION,  # Filter, not trigger
     SignalType.ATS_EXTREME: SignalCategory.CONFIRMATION,
     SignalType.BOOK_DISAGREEMENT: SignalCategory.CONFIRMATION,
     SignalType.CROSS_SOURCE_DIVERGENCE: SignalCategory.CONFIRMATION,
