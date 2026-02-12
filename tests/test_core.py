@@ -694,3 +694,72 @@ class TestParlayTracker:
         summary = self.tracker.get_summary()
         assert "total_parlays" in summary
         assert "net_pnl" in summary
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Roster Update Tracker Tests
+# ═══════════════════════════════════════════════════════════════════
+
+class TestRosterUpdateTracker:
+    """Test trade deadline roster tracking."""
+
+    def setup_method(self):
+        from engine.roster_update_tracker import RosterUpdateTracker
+        import tempfile
+        
+        # Create tracker with temp file
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self.tmp.close()
+        self.tracker = RosterUpdateTracker(cache_file=Path(self.tmp.name))
+
+    def teardown_method(self):
+        try:
+            os.unlink(self.tmp.name)
+        except Exception:
+            pass
+
+    def test_instantiates(self):
+        assert self.tracker is not None
+
+    def test_trade_deadline_detection_february(self):
+        """Should detect trade deadline period in Feb 1-15."""
+        from datetime import date
+        assert self.tracker.is_trade_deadline_period(date(2026, 2, 5)) is True
+        assert self.tracker.is_trade_deadline_period(date(2026, 2, 15)) is True
+
+    def test_trade_deadline_detection_other_months(self):
+        """Should NOT detect trade deadline outside Feb 1-15."""
+        from datetime import date
+        assert self.tracker.is_trade_deadline_period(date(2026, 1, 31)) is False
+        assert self.tracker.is_trade_deadline_period(date(2026, 2, 16)) is False
+        assert self.tracker.is_trade_deadline_period(date(2026, 3, 1)) is False
+
+    def test_get_trade_deadline_date(self):
+        """Should return approx trade deadline date."""
+        deadline = self.tracker.get_trade_deadline_date(2026)
+        assert deadline.month == 2
+        assert deadline.year == 2026
+
+    def test_player_team_mapping_build(self):
+        """Should build player -> team mapping from rosters."""
+        rosters = {
+            "CLE": ["Donovan Mitchell", "James Harden", "Jarrett Allen"],
+            "LAL": ["LeBron James", "Anthony Davis"],
+        }
+        mapping = self.tracker.build_player_team_mapping(rosters)
+        
+        assert mapping["Donovan Mitchell"] == "CLE"
+        assert mapping["James Harden"] == "CLE"
+        assert mapping["LeBron James"] == "LAL"
+
+    def test_get_current_team(self):
+        """Should retrieve current team for a player."""
+        # Populate cache
+        self.tracker.player_to_team = {
+            "James Harden": "CLE",
+            "Stephen Curry": "GS",
+        }
+        
+        assert self.tracker.get_current_team("James Harden") == "CLE"
+        assert self.tracker.get_current_team("Stephen Curry") == "GS"
+        assert self.tracker.get_current_team("Unknown Player") is None

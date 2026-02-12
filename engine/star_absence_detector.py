@@ -62,6 +62,7 @@ ESPN_TEAM_IDS = {
 
 # Top-usage stars — players whose absence shifts lines 2-5 pts
 # Approximate usage rate and typical impact on team total when OUT
+# 🚨 FEB 2026 TRADE DEADLINE: Teams updated for mid-season trades
 STAR_IMPACT = {
     # Format: "Player Name": {"team": "ABR", "usage": float, "total_impact": float, "spread_impact": float}
     "Luka Doncic":      {"team": "DAL", "usage": 33.2, "total_impact": -5.0, "spread_impact": 3.5},
@@ -76,6 +77,7 @@ STAR_IMPACT = {
     "Anthony Edwards":  {"team": "MIN", "usage": 30.0, "total_impact": -4.0, "spread_impact": 2.5},
     "Jayson Tatum":     {"team": "BOS", "usage": 29.8, "total_impact": -3.5, "spread_impact": 2.5},
     "Donovan Mitchell": {"team": "CLE", "usage": 29.0, "total_impact": -3.5, "spread_impact": 2.0},
+    "James Harden":     {"team": "CLE", "usage": 27.5, "total_impact": -3.5, "spread_impact": 2.5},  # ✅ TRADED Feb 2026
     "Tyrese Haliburton": {"team": "IND", "usage": 27.5, "total_impact": -3.5, "spread_impact": 2.5},
     "De'Aaron Fox":     {"team": "SAC", "usage": 28.5, "total_impact": -3.5, "spread_impact": 2.5},
     "Damian Lillard":   {"team": "MIL", "usage": 28.0, "total_impact": -3.5, "spread_impact": 2.0},
@@ -147,7 +149,85 @@ class StarAbsenceDetector:
     """
     Fetches injuries from ESPN and detects star absences that
     should trigger signal adjustments.
+    
+    Now integrates with RosterUpdateTracker to handle trade deadline
+    roster changes (e.g., James Harden → CLE).
     """
+
+    def __init__(self, roster_tracker=None, auto_sync_rosters: bool = True):
+        """
+        Initialize detector with optional roster tracking.
+        
+        Args:
+            roster_tracker: RosterUpdateTracker instance (optional)
+            auto_sync_rosters: Auto-sync rosters during trade deadline period
+        """
+        self.roster_tracker = roster_tracker
+        self.auto_sync = auto_sync_rosters
+        self._star_impact_cache = None  # Cached STAR_IMPACT with updated teams
+        
+        # Auto-load roster tracker if in trade deadline period
+        if auto_sync_rosters and roster_tracker is None:
+            try:
+                from engine.roster_update_tracker import RosterUpdateTracker
+                self.roster_tracker = RosterUpdateTracker()
+                if self.roster_tracker.is_trade_deadline_period():
+                    logger.info("Trade deadline period detected — syncing rosters")
+                    self.sync_rosters()
+            except Exception as e:
+                logger.warning(f"Could not auto-load roster tracker: {e}")
+    
+    def sync_rosters(self, force: bool = False) -> int:
+        """
+        Sync STAR_IMPACT teams with current NBA rosters.
+        
+        Returns:
+            Number of roster changes detected
+        """
+        if not self.roster_tracker:
+            logger.warning("No roster tracker configured — skipping sync")
+            return 0
+        
+        changes = self.roster_tracker.sync_star_rosters(force=force)
+        if changes:
+            logger.info(f"Detected {len(changes)} roster changes:")
+            for change in changes:
+                logger.info(f"  {change.player_name}: {change.old_team} → {change.new_team}")
+        
+        # Update cached STAR_IMPACT
+        self._star_impact_cache = self.roster_tracker.get_updated_star_impact()
+        return len(changes)
+    
+    def get_star_impact(self) -> Dict:
+        """
+        Get STAR_IMPACT dictionary with current teams.
+        
+        Returns cached updated version if available, else returns original.
+        """
+        if self._star_impact_cache:
+            return self._star_impact_cache
+        return STAR_IMPACT
+    
+    def get_player_team(self, player_name: str) -> Optional[str]:
+        """
+        Get current team for a player, checking roster tracker if available.
+        
+        Args:
+            player_name: Player's name
+        
+        Returns:
+            Team abbreviation or None
+        """
+        # First check updated cache
+        star_impact = self.get_star_impact()
+        if player_name in star_impact:
+            return star_impact[player_name].get("team")
+        
+        # Fallback to roster tracker if available
+        if self.roster_tracker:
+            return self.roster_tracker.get_current_team(player_name)
+        
+        return None
 
     def fetch_injuries_from_scoreboard(self, date_str: Optional[str] = None) -> List[Dict]:
         """
@@ -213,12 +293,18 @@ class StarAbsenceDetector:
         star_injuries: List[InjuryInfo] = []
 
         # Process OUT players
+        star_impact = self.get_star_impact()  # Use updated teams if available
+        
         for player in players_out:
-            impact = STAR_IMPACT.get(player, {})
-            is_star = player in STAR_IMPACT
+            impact = star_impact.get(player, {})
+            is_star = player in star_impact
+            
+            # Get current team (handles trades)
+            current_team = self.get_player_team(player) or impact.get("team", "?")
+            
             injury = InjuryInfo(
                 player_name=player,
-                team=impact.get("team", "?"),
+                team=current_team,
                 status="Out",
                 reason="Reported OUT",
                 is_star=is_star,
@@ -231,11 +317,15 @@ class StarAbsenceDetector:
 
         # Process GTD players
         for player in (players_gtd or []):
-            impact = STAR_IMPACT.get(player, {})
-            is_star = player in STAR_IMPACT
+            impact = star_impact.get(player, {})
+            is_star = player in star_impact
+            
+            # Get current team (handles trades)
+            current_team = self.get_player_team(player) or impact.get("team", "?")
+            
             injury = InjuryInfo(
                 player_name=player,
-                team=impact.get("team", "?"),
+                team=current_team,
                 status="Game-Time Decision",
                 reason="GTD",
                 is_star=is_star,

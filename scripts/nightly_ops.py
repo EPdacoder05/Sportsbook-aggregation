@@ -39,6 +39,7 @@ from engine.confidence_decay import ConfidenceDecayEngine
 from engine.quarter_line_detector import QuarterLineDetector
 from engine.star_absence_detector import StarAbsenceDetector
 from engine.parlay_tracker import ParlayTracker
+from engine.roster_update_tracker import RosterUpdateTracker
 
 
 def load_env():
@@ -400,7 +401,7 @@ def main():
     print("═" * 60)
 
     # ── Step 1: Fetch ESPN Slate ──
-    print("\n[1/8] Fetching today's slate from ESPN...")
+    print("\n[1/10] Fetching today's slate from ESPN...")
     games = fetch_espn_slate(args.sport)
     print(f"  Found {len(games)} games")
 
@@ -411,32 +412,48 @@ def main():
     for g in games:
         print(f"    {g['game_key']}  ({g.get('start_time', '?')})")
 
+    # ── Step 1.5: Roster Sync (Trade Deadline) ──
+    print("\n[1.5/10] Checking for roster updates (trade deadline)...")
+    roster_tracker = RosterUpdateTracker()
+    if roster_tracker.is_trade_deadline_period():
+        print("  🚨 TRADE DEADLINE PERIOD — syncing rosters from ESPN")
+        changes = roster_tracker.sync_star_rosters(force=False)
+        if changes:
+            print(f"  ✅ Detected {len(changes)} roster changes:")
+            for change in changes[:5]:  # Show first 5
+                print(f"    {change.player_name}: {change.old_team} → {change.new_team}")
+        else:
+            print("  No roster changes detected")
+    else:
+        print("  Not in trade deadline period — skipping roster sync")
+        print(f"  (Trade deadline: {roster_tracker.get_trade_deadline_date()})")
+
     # ── Step 2: Fetch Odds ──
     odds_data = []
     if not args.no_odds:
-        print("\n[2/8] Fetching odds from The Odds API...")
+        print("\n[2/10] Fetching odds from The Odds API...")
         api_key = os.environ.get("ODDS_API_KEY", "")
         odds_data = fetch_odds(args.sport, api_key)
         print(f"  Got odds for {len(odds_data)} events")
     else:
-        print("\n[2/8] Skipping odds fetch (--no-odds)")
+        print("\n[2/10] Skipping odds fetch (--no-odds)")
 
     # ── Step 3: Merge ──
-    print("\n[3/8] Merging slate with odds...")
+    print("\n[3/10] Merging slate with odds...")
     merged = merge_slate_with_odds(games, odds_data)
     games_with_odds = sum(1 for g in merged if g.get("odds", {}).get("num_books", 0) > 0)
     print(f"  Merged: {games_with_odds}/{len(merged)} games have odds")
 
     # ── Step 4: Analyze ──
-    print("\n[4/8] Running analysis on all games...")
+    print("\n[4/10] Running analysis on all games...")
     analyses = [analyze_game(g) for g in merged]
 
     # ── Step 5: Generate Pick Card ──
-    print("\n[5/8] Generating pick card...")
+    print("\n[5/10] Generating pick card...")
     pick_card = generate_pick_card(analyses)
 
     # ── Step 5.5: Apply Confidence Decay ──
-    print("\n[5.5/8] Applying confidence decay...")
+    print("\n[5.5/10] Applying confidence decay...")
     decay_engine = ConfidenceDecayEngine()
     
     # Collect all picks with tier info
@@ -494,12 +511,13 @@ def main():
 
     # ── Step 7/10: Star Absence Detection ──
     print("\n[7/10] Scanning for star absences (ESPN injuries)...")
-    star_detector = StarAbsenceDetector()
+    star_detector = StarAbsenceDetector(roster_tracker=roster_tracker, auto_sync_rosters=False)
     star_results = star_detector.analyze_slate(games)
     star_warnings = [r for r in star_results if r.signal.value != "NONE"]
     for sw in star_warnings:
-        out_names = ", ".join(sw.players_out)
-        print(f"  ⚠ {sw.game_key}: {out_names} OUT → Under boost {sw.under_boost:+.0%}, Spread adj {sw.spread_adjustment:+.1f}")
+        out_names = ", ".join(sw.players_out) if hasattr(sw, 'players_out') else "N/A"
+        spread_adj = getattr(sw, 'spread_adjustment', sw.spread_impact)
+        print(f"  ⚠ {sw.game_key}: {out_names} OUT → Under boost {sw.under_boost:+.0%}, Spread adj {spread_adj:+.1f}")
     if not star_warnings:
         print("  No star absences detected")
 
