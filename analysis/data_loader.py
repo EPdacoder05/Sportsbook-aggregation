@@ -244,6 +244,8 @@ class DataLoader:
                         away_team = game_data.get("away_team", "").lower()
                         
                         if side == "home" and outcome_name == home_team:
+                            # Higher decimal odds = better value for bettor
+                            # e.g., 1.95 pays more than 1.90 for same stake
                             if best is None or outcome_price > best["odds"]:
                                 best = {
                                     "line": outcome_point,

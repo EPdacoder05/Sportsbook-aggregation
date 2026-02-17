@@ -85,7 +85,14 @@ def main():
             logger.info(f"\n🎯 Generated {len(picks)} pick(s):")
             for pick in picks:
                 logger.info("")
-                logger.info(f"{'🔥🔥🔥' if pick.tier == 'TIER_1' else '🔶' if pick.tier == 'TIER_2' else '📌'} {pick.tier}: {pick.pick}")
+                # Select emoji based on tier
+                tier_emojis = {
+                    "TIER_1": "🔥🔥🔥",
+                    "TIER_2": "🔶",
+                    "LEAN": "📌"
+                }
+                emoji = tier_emojis.get(pick.tier, "📌")
+                logger.info(f"{emoji} {pick.tier}: {pick.pick}")
                 logger.info(f"   Confidence: {pick.confidence*100:.0f}%")
                 logger.info(f"   Signals: {', '.join(pick.signals)}")
                 logger.info(f"   Reasoning: {pick.reasoning}")

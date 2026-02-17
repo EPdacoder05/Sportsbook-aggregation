@@ -152,6 +152,8 @@ class ConfidenceScorer:
         primary_confidence = sum(s.confidence for s in detected_primary) / len(detected_primary)
         
         # Boost by confirmation signals (diminishing returns)
+        # First confirmation: +5%, second: +2.5%, third: +1.67%, etc.
+        # This prevents confirmation signals from overwhelming primary signals
         confirmation_boost = 0.0
         for i, signal in enumerate(detected_confirmation):
             # First confirmation: +5%, second: +3%, third: +2%, etc.
