@@ -1,13 +1,13 @@
 # Sportsbook Aggregation Engine
 
-**Algorithmic Sports Betting Analysis | Signal Classification | Autonomous Nightly Ops**
+**Algorithmic Sports Betting Analysis | RLM Detection | Autonomous Nightly Ops**
 
 ---
 
 ## Overview
 
 A Python-based autonomous sports betting analysis engine focused on NBA.
-It merges free ESPN data with The Odds API odds, runs Reverse Line Movement (RLM) detection, classifies signals into PRIMARY vs CONFIRMATION tiers, applies confidence decay over time, and outputs tiered pick cards with Discord notifications.
+It merges free ESPN data with The Odds API odds, runs Reverse Line Movement (RLM) detection, ML-vs-Spread divergence analysis, classifies signals into PRIMARY vs CONFIRMATION tiers, applies confidence decay over time, and outputs tiered pick cards with Discord notifications.
 
 **Key principle:** This is an *analysis* tool, not a gambling bot. It treats betting like algorithmic trading — edge-first, bankroll-managed, data-driven.
 
@@ -19,28 +19,21 @@ It merges free ESPN data with The Odds API odds, runs Reverse Line Movement (RLM
 Data Ingestion (ESPN free + Odds API)
         │
         ▼
-Signal Detection
-  ├── RLM (spread & total)
-  ├── Line Freeze Detection
-  ├── Book Disagreement
-  ├── ML/Spread Divergence
-  └── Public Money Extremes
+RLM Analysis Engine (analysis/)
+  ├── Spread RLM: Line moves against public
+  ├── Total RLM: Total drops/rises against public  
+  ├── ML/Spread Divergence: Public trap detection
+  └── ATS Trend Analysis: Fade extreme streaks
         │
         ▼
-Signal Classification (engine/signals.py)
-  ├── PRIMARY signals   → Trigger bets
-  └── CONFIRMATION      → Boost confidence
-        │
-        ▼
-Confidence Scoring + Decay (engine/confidence_decay.py)
-  ├── Time decay (-1.5%/hr after 2hrs)
-  ├── Line movement confirmation/erosion
-  └── Injury & information leak penalties
+Confidence Scoring (multi-signal)
+  ├── Primary signals: Trigger bets
+  └── Confirmation signals: Boost confidence
         │
         ▼
 Tier Classification
-  ├── TIER 1 (≥80% confidence) → Full position
-  ├── TIER 2 (≥70%)           → Partial position
+  ├── TIER 1 (≥85% confidence) → Full position
+  ├── TIER 2 (≥75%)           → Partial position
   ├── LEAN   (≥60%)           → Small or watch
   └── PASS   (<60%)           → No bet
         │
@@ -48,13 +41,22 @@ Tier Classification
 Output
   ├── Console pick card
   ├── data/picks_YYYYMMDD.json
-  ├── Discord webhook notification
+  ├── Discord webhook notification (Tier 1/2)
   └── CLV tracking for long-term P&L
 ```
 
 ---
 
 ## Modules
+
+### Analysis (`analysis/`) — NEW Intelligence Layer
+
+| Module | Purpose |
+|--------|---------|
+| `rlm_detector.py` | Reverse Line Movement detection (4 strategies: Spread RLM, Total RLM, ML-Spread Divergence, ATS Trends) |
+| `confidence.py` | Multi-signal confidence scorer with tier classification |
+| `data_loader.py` | Unified data loading from odds/opening lines/public splits |
+| `pick_generator.py` | Complete pick generation pipeline |
 
 ### Engine (`engine/`)
 
@@ -104,6 +106,7 @@ Output
 | Module | Purpose |
 |--------|---------|
 | `pick_notifier.py` | Sends pick cards and reports to Discord via webhook. |
+| `discord_notifier.py` | **NEW** Rich Discord embeds for Tier 1/2 picks with confidence scores. |
 | `discord_webhook.py` | Low-level Discord webhook sender. |
 | `email_alert.py` | Email alert support. |
 
@@ -161,6 +164,66 @@ python scripts/analyze_results.py --date 2025-02-09
 The Odds API provides **500 free credits/month**. Each odds fetch costs credits based on markets requested.
 
 The engine tracks usage via `engine/credit_tracker.py` and will skip fetches when the budget is exhausted. Use `--no-odds` for zero-credit runs that rely on cached or ESPN-only data.
+
+---
+
+## RLM Detection Strategies
+
+The analysis engine implements 4 core RLM (Reverse Line Movement) strategies:
+
+### 1. Spread RLM
+**Strategy:** Line moves AGAINST the side with 60%+ public money.
+
+**Example:**
+- Opening: OKC @ LAL, Lakers -4.0
+- Public: 57% on Lakers
+- Current: Lakers -6.5 (line moved AGAINST Lakers)
+- **Detection:** Sharp money is on OKC -6.5
+
+**Thresholds:**
+- Minimum line movement: 1.5 points
+- Minimum public bias: 55%
+- Confidence: 75-90% based on magnitude
+
+### 2. Total RLM
+**Strategy:** Total drops/rises 4+ points against public Over/Under bias.
+
+**Example:**
+- Opening: CHI @ BKN, Total 223.5
+- Public: 64% on Over
+- Current: Total 218.5 (dropped 5.0 points)
+- **Detection:** Sharp money on UNDER 218.5 (Tier 1, 85% confidence)
+
+**Thresholds:**
+- Minimum total movement: 2.0 points
+- Strong signal: 4.0+ points
+- Minimum public bias: 60%
+
+### 3. ML-Spread Divergence
+**Strategy:** When Moneyline % - Spread % > 25%, public says "team wins but doesn't cover."
+
+**Example:**
+- MIL @ ORL
+- Public: 84% ML on Orlando, 36% spread on Orlando
+- Divergence: 48% (HIGHEST)
+- **Interpretation:** Public thinks Orlando wins but doesn't cover
+- **Pick:** MIL +10.5 (sharp side with points)
+
+**Thresholds:**
+- Minimum divergence: 15%
+- Strong signal: 30%+
+- Confidence: 70-85%
+
+### 4. ATS Trend Extremes
+**Strategy:** Fade extreme ATS streaks (regression to mean).
+
+**Example:**
+- CHI is 2-8 ATS L10 → Bet ON Chicago (fade cold streak)
+- BOS is 8-2 ATS L10 → Bet AGAINST Boston (fade hot streak)
+
+**Thresholds:**
+- Extreme: ≥70% win/loss rate (7-3 or worse)
+- Confidence: 65-70% (confirmation signal)
 
 ---
 
@@ -229,11 +292,17 @@ The `engine/boost_ev.py` module evaluates DraftKings profit boosts:
 ## Project Structure
 
 ```
+├── analysis/                  # NEW - Core intelligence layer
+│   ├── rlm_detector.py        # RLM detection strategies
+│   ├── confidence.py          # Multi-signal confidence scoring
+│   ├── data_loader.py         # Unified data loading
+│   └── pick_generator.py      # Pick generation pipeline
 ├── engine/                    # Core analysis modules
 │   ├── signals.py             # Signal classification (PRIMARY vs CONFIRMATION)
 │   ├── confidence_decay.py    # Time/market decay engine
 │   ├── clv_tracker.py         # Closing Line Value tracker
 │   ├── line_freeze_detector.py# Book trap detection
+│   ├── line_tracker.py        # NEW - Opening line tracking
 │   ├── boost_ev.py            # Profit boost EV calculator
 │   ├── betting_engine.py      # Unified orchestrator (wires everything)
 │   ├── no_bet_detector.py     # Coin-flip filter
@@ -247,6 +316,7 @@ The `engine/boost_ev.py` module evaluates DraftKings profit boosts:
 │   └── ...
 ├── scripts/                   # Runnable scripts
 │   ├── nightly_ops.py         # Main entry point
+│   ├── test_pick_generator.py # NEW - Test pick generation
 │   ├── analyze_results.py     # Post-game autopsy
 │   ├── run_daily_engine.py    # Cron scheduler
 │   └── ...
@@ -255,6 +325,11 @@ The `engine/boost_ev.py` module evaluates DraftKings profit boosts:
 │   └── ...
 ├── alerts/                    # Notification senders
 │   ├── pick_notifier.py       # Discord notifications
+│   ├── discord_notifier.py    # NEW - Rich Discord embeds
+│   └── ...
+├── tests/                     # Test suite
+│   ├── test_rlm_detector.py   # NEW - RLM detection tests
+│   ├── test_confidence.py     # NEW - Confidence scoring tests
 │   └── ...
 ├── scrapers/                  # Data scrapers
 ├── database/                  # DB models
