@@ -15,22 +15,22 @@ asyncpg==0.29.0
 # Pin to 0.25.2 to satisfy python-telegram-bot and openai/httpx constraints during container builds
 httpx==0.25.2
 beautifulsoup4==4.12.3
-playwright==1.41.0
+playwright>=1.41.0
 selenium==4.17.2
-scrapy==2.11.0
+scrapy>=2.11.0
 aiohttp==3.9.3
 
 # OCR & Image Processing
 pytesseract==0.3.10
 Pillow==10.2.0
-google-cloud-vision==3.7.0
-opencv-python==4.9.0.80
+google-cloud-vision>=3.7.0
+opencv-python>=4.9.0
 
 # AI/ML
 openai==1.10.0  # For Grok API
-scikit-learn==1.6.1
-pandas==2.2.0
-numpy==2.2.3
+scikit-learn>=1.4.0
+pandas>=2.1.0
+numpy>=1.26.0
 joblib==1.4.2
 
 # Twitter/X API
@@ -42,8 +42,8 @@ instaloader==4.10.3
 praw==7.7.1  # Reddit API
 
 # Blockchain
-web3==6.15.0
-eth-account==0.11.0
+web3>=6.15.0
+eth-account>=0.11.0
 
 # Messaging / PubSub
 redis==5.0.1

@@ -236,6 +236,77 @@ class NFLESPNSource(ScoreSource):
         return games
 
 
+class NCAAWESPNSource(ScoreSource):
+    """ESPN site API for NCAAW (Women's College Basketball) live scores"""
+    
+    def __init__(self):
+        self.headers = {"User-Agent": "Mozilla/5.0"}
+        self.base_url = "https://site.api.espn.com/apis/site/v2/sports/basketball/womens-college-basketball"
+    
+    def sport(self) -> str:
+        return "NCAAW"
+    
+    def fetch_games(self) -> List[GameScore]:
+        games = []
+        try:
+            resp = requests.get(
+                f"{self.base_url}/scoreboard",
+                headers=self.headers,
+                timeout=10
+            )
+            
+            if resp.status_code != 200:
+                print(f"  NCAAW API error: {resp.status_code}")
+                return games
+            
+            data = resp.json()
+            
+            for event in data.get('events', []):
+                competitions = event.get('competitions', [])
+                if not competitions:
+                    continue
+                comps = competitions[0]
+                competitors = comps.get('competitors', [])
+                
+                if len(competitors) < 2:
+                    continue
+                
+                # Determine home/away
+                home = competitors[0]
+                away = competitors[1]
+                
+                # Status
+                status_obj = comps.get('status', {})
+                # status_obj['type'] is a dict with 'description' key
+                if isinstance(status_obj.get('type'), dict):
+                    status = status_obj['type'].get('description', 'Unknown')
+                else:
+                    # Fallback: might be a string
+                    status_str = status_obj.get('type', 'pre')
+                    status_map = {
+                        'pre': 'Scheduled',
+                        'in': 'Live',
+                        'post': 'Final',
+                    }
+                    status = status_map.get(status_str, 'Unknown')
+                
+                games.append(GameScore(
+                    game_id=event.get('id', ''),
+                    home_team=home.get('team', {}).get('displayName', 'Unknown'),
+                    away_team=away.get('team', {}).get('displayName', 'Unknown'),
+                    home_score=int(home.get('score', 0)),
+                    away_score=int(away.get('score', 0)),
+                    status=status,
+                    sport=self.sport(),
+                    last_update=datetime.now().isoformat(timespec='seconds'),
+                ))
+        
+        except Exception as e:
+            print(f"  NCAAW fetch error: {e}")
+        
+        return games
+
+
 class LiveScoreService:
     """Main service - coordinates multiple sources"""
     
@@ -243,6 +314,7 @@ class LiveScoreService:
         self.sources: Dict[str, ScoreSource] = {
             'nba': NBAOfficialSource(),
             'ncaab': NCAABESPNSource(),
+            'ncaaw': NCAAWESPNSource(),
             'nfl': NFLESPNSource(),
         }
         self.last_state = {}
