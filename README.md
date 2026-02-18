@@ -224,11 +224,15 @@ docker compose down
 ### Security Scanning
 
 ```bash
-# Scan the image for vulnerabilities
-docker scan sportsbook-aggregation:latest
+# Scan the built image for vulnerabilities (docker scan)
+docker scan sportsbook-aggregation-api
 
-# Or use Trivy
-trivy image sportsbook-aggregation:latest
+# Or use Trivy for comprehensive scanning
+trivy image sportsbook-aggregation-api
+
+# Scan specific service images
+docker compose build api
+trivy image $(docker compose images api -q)
 ```
 
 ---
