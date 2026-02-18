@@ -5,7 +5,7 @@ Tests for session tracking and withdrawal recommendations.
 """
 
 import pytest
-from engine.greed_index import GreedIndexEngine, BetRecord, GREED_THRESHOLDS, WITHDRAWAL_RULES
+from engine.greed_index import GreedIndexEngine, GREED_THRESHOLDS
 
 
 def test_greed_engine_initialization():

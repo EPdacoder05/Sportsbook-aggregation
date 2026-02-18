@@ -5,7 +5,7 @@ Tests for the 11 rule-based live Under bet protection system.
 """
 
 import pytest
-from engine.live_under_protector_v2 import LiveUnderProtector, BettingDecision, PROTECTOR_RULES
+from engine.live_under_protector_v2 import LiveUnderProtector
 
 
 def test_protector_initialization():

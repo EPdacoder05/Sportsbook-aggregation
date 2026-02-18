@@ -165,7 +165,10 @@ def test_analyze_pace_trend_accelerating():
         "away_score": 75,
         "full_game_pace": 2.5,
         "first_half_pace": 2.0,
-        "second_half_pace": 3.0  # 50% increase
+        "second_half_pace": 3.0,  # 50% increase
+        "halftime_total": 70,  # For get_2h_pace calculation
+        "period": 2,
+        "clock_minutes": 5.0
     }
 
     trend = analyzer.analyze_pace_trend(game_state)
@@ -183,12 +186,17 @@ def test_analyze_pace_trend_decelerating():
         "home_score": 60,
         "away_score": 55,
         "full_game_pace": 2.0,
-        "first_half_pace": 3.0,
-        "second_half_pace": 2.0  # -33% decrease
+        "first_half_pace": 4.0,  # Higher first half
+        "second_half_pace": 2.5,  # Lower second half
+        "halftime_total": 90,  # High halftime score
+        "period": 2,
+        "clock_minutes": 10.0
     }
 
     trend = analyzer.analyze_pace_trend(game_state)
 
+    # 2H will calculate: (115 - 90) / (20 - 10) = 25 / 10 = 2.5
+    # Change: (2.5 - 4.0) / 4.0 = -37.5%
     assert trend["pace_direction"] == "decelerating"
     assert trend["pace_change_pct"] < -15
 
@@ -264,19 +272,25 @@ def test_projection_with_default_pace():
     """Test projection falls back to default pace if no pace data."""
     analyzer = PaceAnalyzer()
 
+    # Ensure both full_game_pace and 2H_pace calculation return 0
+    # by making it look like start of game (no elapsed time)
     game_state = {
         "home_score": 50,
         "away_score": 45,
-        "time_left_minutes": 20.0,
-        "full_game_pace": 0.0,  # No pace data
-        "second_half_pace": 0.0
+        "time_left_minutes": 40.0,  # Full game remaining
+        "full_game_pace": 0.0,  # No pace data provided
+        "second_half_pace": 0.0,  # No pace data provided
+        "game_minutes": 40.0,
+        "halftime_total": 0,  # No halftime data
+        "period": 1,  # Still in first half
+        "clock_minutes": 40.0
     }
 
     projected = analyzer.project_final_score(game_state)
 
     # Should use default 2.0 pts/min
-    # 95 + (2.0 * 20) = 135
-    assert projected == pytest.approx(135.0, rel=0.1)
+    # 95 + (2.0 * 40) = 175
+    assert projected == pytest.approx(175.0, rel=0.1)
 
 
 if __name__ == "__main__":

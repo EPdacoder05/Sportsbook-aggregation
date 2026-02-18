@@ -154,8 +154,10 @@ class LiveUnderProtector:
             return BettingDecision(
                 action="CASH_OUT",
                 urgency="IMMEDIATE",
-                immediate_instruction=f"CASH OUT ${cash_out:.2f} NOW - Cushion too tight with {time_left:.1f} min left",
-                reasoning=f"RULE_2: Cushion {cushion:.1f} < 5 points with {time_left:.1f} minutes remaining. Too risky.",
+                immediate_instruction=f"CASH OUT ${cash_out:.2f} NOW - "
+                                     f"Cushion too tight with {time_left:.1f} min left",
+                reasoning=f"RULE_2: Cushion {cushion:.1f} < 5 points with "
+                         f"{time_left:.1f} minutes remaining. Too risky.",
                 projected_final=projected_final,
                 cushion=cushion,
                 win_probability=0.3,
