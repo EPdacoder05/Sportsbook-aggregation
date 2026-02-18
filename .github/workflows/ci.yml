@@ -29,9 +29,9 @@ jobs:
       - name: Lint with flake8
         run: |
           # Stop build on syntax errors or undefined names
-          flake8 engine/ scripts/ api/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 engine/ scripts/ api/ analysis/ alerts/ --count --select=E9,F63,F7,F82 --show-source --statistics
           # Warnings (non-blocking)
-          flake8 engine/ scripts/ api/ --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics
+          flake8 engine/ scripts/ api/ analysis/ alerts/ --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics
 
       - name: Type check with mypy
         run: |
@@ -62,7 +62,7 @@ jobs:
 
       - name: Static security scan (Bandit)
         run: |
-          bandit -r engine/ api/ scripts/ -ll --skip B101,B311 -f txt 2>&1 || true
+          bandit -r engine/ api/ scripts/ analysis/ alerts/ -ll --skip B101,B311 -f txt 2>&1 || true
 
       - name: Check for known vulnerabilities (Safety)
         run: |
