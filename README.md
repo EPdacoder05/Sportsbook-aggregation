@@ -159,6 +159,84 @@ python scripts/analyze_results.py --date 2025-02-09
 
 ---
 
+## Docker Security
+
+The application uses a **hardened Docker setup** with multi-layered security:
+
+### Security Features
+
+#### 1. Multi-Stage Build
+The Dockerfile uses a two-stage build process:
+- **Builder stage**: Compiles dependencies with build tools (gcc, etc.)
+- **Runtime stage**: Contains only runtime dependencies, reducing attack surface by ~40%
+
+#### 2. Non-Root User
+All containers run as the `appuser` (non-root) user with:
+- No shell access (`/sbin/nologin`)
+- Restricted home directory (`/app`)
+- Minimal system privileges
+
+#### 3. Security Options
+All services in `docker-compose.yml` enforce:
+- `no-new-privileges`: Prevents privilege escalation attacks
+- Pinned image versions (no `latest` tags)
+- Healthchecks for automatic recovery
+
+#### 4. Minimal Base Image
+Uses `python:3.12-slim-bookworm`:
+- Debian-based minimal image
+- Regular security patches
+- ~5x smaller than full Python image
+
+#### 5. Image Metadata
+OCI-compliant labels for:
+- Source repository tracking
+- Maintainer information
+- Security scanning integration
+
+### Running with Docker
+
+```bash
+# Build the image
+docker compose build
+
+# Start all services
+docker compose up -d
+
+# Check service health
+docker compose ps
+
+# View logs
+docker compose logs -f api
+
+# Stop all services
+docker compose down
+```
+
+### Docker Deployment Best Practices
+
+1. **Always set strong passwords**: Update `DB_PASSWORD` in `.env`
+2. **Keep images updated**: Rebuild weekly for security patches
+3. **Monitor logs**: Use `docker compose logs` to track suspicious activity
+4. **Limit network exposure**: Only expose necessary ports (8000, 8501)
+5. **Use secrets management**: For production, use Docker secrets instead of environment variables
+
+### Security Scanning
+
+```bash
+# Scan the built image for vulnerabilities (docker scan)
+docker scan sportsbook-aggregation-api
+
+# Or use Trivy for comprehensive scanning
+trivy image sportsbook-aggregation-api
+
+# Scan specific service images
+docker compose build api
+trivy image $(docker compose images api -q)
+```
+
+---
+
 ## API Credit Budget
 
 The Odds API provides **500 free credits/month**. Each odds fetch costs credits based on markets requested.

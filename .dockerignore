@@ -1,6 +1,7 @@
 # Git
 .git
 .gitignore
+.github/
 
 # Python cache
 __pycache__
@@ -28,6 +29,7 @@ logs/
 
 # Environment secrets
 .env
+.env.example
 
 # OS files
 .DS_Store
@@ -35,11 +37,17 @@ Thumbs.db
 
 # Tests (not needed in production image)
 tests/
+*.test.*
 .pytest_cache/
 .coverage
 htmlcov/
+pytest.ini
 
-# Documentation
+# Documentation (except README if needed)
 *.md
-!README.md
 LICENSE
+
+# Docker files
+docker-compose.yml
+Dockerfile
+.dockerignore
