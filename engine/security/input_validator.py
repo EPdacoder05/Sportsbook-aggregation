@@ -294,8 +294,8 @@ class InputValidator:
 
         # Remove null bytes
         cleaned = input_str.replace("\x00", "")
-        # Remove script tags
-        cleaned = re.sub(r"<\s*script[^>]*>.*?</\s*script\s*>", "", cleaned, flags=re.I | re.S)
+        # Remove script tags (including malformed closing tags like </script foo="bar">)
+        cleaned = re.sub(r"<\s*script\b[^>]*>.*?</\s*script[^>]*>", "", cleaned, flags=re.I | re.S)
         # Remove event handlers
         cleaned = re.sub(r"\bon\w+\s*=\s*[\"'][^\"']*[\"']", "", cleaned, flags=re.I)
         # Escape HTML entities
