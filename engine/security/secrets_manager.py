@@ -92,7 +92,9 @@ class SecretsManager:
         ]
 
         if missing:
-            logger.error(f"Missing required secrets: {missing}")
+            logger.error(
+                "One or more required secrets are missing; check configuration."
+            )
             raise ValueError(
                 f"Missing required secrets: {', '.join(missing)}. "
                 f"Add them to .env or set as environment variables."
