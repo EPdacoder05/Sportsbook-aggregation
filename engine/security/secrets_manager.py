@@ -100,12 +100,20 @@ class SecretsManager:
                 f"Add them to .env or set as environment variables."
             )
 
-        # Log status
-        for key in REQUIRED_SECRETS:
-            logger.info(f"  ✅ {key}: present")
-        for key in OPTIONAL_SECRETS:
-            status = "✅" if self._secrets.get(key) else "⚪"
-            logger.info(f"  {status} {key}: {'present' if self._secrets.get(key) else 'not set'}")
+        # Log aggregate status without exposing individual secret names or values
+        required_present = sum(
+            1 for key in REQUIRED_SECRETS if self._secrets.get(key)
+        )
+        optional_present = sum(
+            1 for key in OPTIONAL_SECRETS if self._secrets.get(key)
+        )
+        logger.info(
+            "Secrets validation passed: %d/%d required and %d/%d optional secrets present.",
+            required_present,
+            len(REQUIRED_SECRETS),
+            optional_present,
+            len(OPTIONAL_SECRETS),
+        )
 
         return missing
 
